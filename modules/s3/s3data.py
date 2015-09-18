@@ -2,7 +2,7 @@
 
 """ S3 Data Views
 
-    @copyright: 2009-2013 (c) Sahana Software Foundation
+    @copyright: 2009-2015 (c) Sahana Software Foundation
     @license: MIT
 
     Permission is hereby granted, free of charge, to any person
@@ -27,35 +27,23 @@
     OTHER DEALINGS IN THE SOFTWARE.
 
     @group Data Views: S3DataTable,
-                       S3DataList,
-                       S3PivotTable
+                       S3DataList
 """
 
-import datetime
-import sys
-import time
+import re
 
-from itertools import product, islice
-
-try:
-    import json # try stdlib (Python 2.6)
-except ImportError:
-    try:
-        import simplejson as json # try external module
-    except:
-        import gluon.contrib.simplejson as json # fallback to pure-Python module
+from itertools import islice
 
 from gluon import current
-from gluon.dal import Expression, Field
 from gluon.html import *
 from gluon.storage import Storage
-from gluon.validators import IS_EMPTY_OR, IS_IN_SET
 
-from s3utils import s3_flatlist, s3_has_foreign_key, s3_truncate, s3_unicode, S3MarkupStripper
-from s3validators import IS_NUMBER
+from s3dal import Expression
+from s3utils import s3_orderby_fields, s3_unicode, s3_set_extension
 
 DEBUG = False
 if DEBUG:
+    import sys
     print >> sys.stderr, "S3 Data Representations: DEBUG MODE"
     def _debug(m):
         print >> sys.stderr, m
@@ -68,7 +56,7 @@ class S3DataTable(object):
 
     # The dataTable id if no explicit value has been provided
     id_counter = 1
-    
+
     # -------------------------------------------------------------------------
     # Standard API
     # -------------------------------------------------------------------------
@@ -79,6 +67,7 @@ class S3DataTable(object):
                  limit=None,
                  filterString=None,
                  orderby=None,
+                 empty=False,
                  ):
         """
             S3DataTable constructor
@@ -94,22 +83,23 @@ class S3DataTable(object):
 
         self.data = data
         self.rfields = rfields
+        self.empty = empty
 
         colnames = []
         heading = {}
-        
+
         append = colnames.append
         for rfield in rfields:
             colname = rfield.colname
             heading[colname] = rfield.label
             append(colname)
-            
+
         self.colnames = colnames
         self.heading = heading
-        
+
         max = len(data)
         if start < 0:
-            start == 0
+            start = 0
         if start > max:
             start = max
         if limit == None:
@@ -123,52 +113,38 @@ class S3DataTable(object):
         self.filterString = filterString
 
         if orderby:
-            
-            if isinstance(orderby, str):
-                orderby_fields = orderby.split(",")
-            elif not isinstance(orderby, (list, tuple)):
-                orderby_fields = [orderby]
-            else:
-                orderby_fields = orderby
-            orderby = []
-            for orderby_field in orderby_fields:
-                if type(orderby_field) is Expression:
-                    f = orderby_field.first
-                    if type(f) is Field and \
-                       orderby_field.op == current.db._adapter.INVERT:
-                        direction = "desc"
-                    else:
-                        continue
-                    fname = str(f)
-                elif type(orderby_field) is Field:
-                    direction = "asc"
-                    fname = str(orderby_field)
-                elif isinstance(orderby_field, str):
-                    fname, direction = (orderby_field.strip().split() + ["asc"])[:2]
+
+            _orderby = []
+
+            INVERT = current.db._adapter.INVERT
+            for f in s3_orderby_fields(None, orderby, expr=True):
+                if type(f) is Expression:
+                    colname = str(f.first)
+                    direction = "desc" \
+                                if f.op == INVERT else "asc"
                 else:
-                    continue
-                idx = 0
-                for rfield in rfields:
-                    if rfield.colname == fname:
-                        orderby.append([idx, direction])
+                    colname = str(f)
+                    direction = "asc"
+                for idx, rfield in enumerate(rfields):
+                    if rfield.colname == colname:
+                        _orderby.append([idx, direction])
                         break
-                    idx += 1
 
         else:
-            orderby = []
-                    
-        self.orderby = orderby
+            _orderby = [[1, "asc"]]
+
+        self.orderby = _orderby
 
     # -------------------------------------------------------------------------
     def html(self,
              totalrows,
              filteredrows,
              id = None,
-             sEcho = 1,
+             draw = 1,
              **attr
              ):
         """
-            Method to render the data into html
+            Method to render the dataTable into html
 
             @param totalrows: The total rows in the unfiltered query.
             @param filteredrows: The total rows in the filtered query.
@@ -177,8 +153,8 @@ class S3DataTable(object):
                            If this is not passed in then a unique id will be
                            generated. Regardless the id is stored in self.id
                            so it can be easily accessed after rendering.
-            @param sEcho: An unaltered copy of sEcho sent from the client used
-                          by dataTables as a draw count.
+            @param draw: An unaltered copy of draw sent from the client used
+                         by dataTables as a draw count.
             @param attr: dictionary of attributes which can be passed in
         """
 
@@ -219,31 +195,62 @@ class S3DataTable(object):
             aadata = self.aadata(totalrows,
                                  filteredrows,
                                  id,
-                                 sEcho,
+                                 draw,
                                  flist,
                                  action_col=action_col,
                                  stringify=False,
                                  **attr)
-            cache = {"iCacheLower": self.start,
-                     "iCacheUpper": self.end if filteredrows > self.end else filteredrows,
-                     "lastJson": aadata}
+            cache = {"cacheLower": self.start,
+                     "cacheUpper": self.end if filteredrows > self.end else filteredrows,
+                     "cacheLastJson": aadata,
+                     }
 
         html = self.htmlConfig(table,
                                id,
                                self.orderby,
                                self.rfields,
                                cache,
-                               filteredrows,
                                **attr
                                )
         return html
+
+    # -------------------------------------------------------------------------
+    @staticmethod
+    def i18n():
+        """
+            Return the i18n strings needed by dataTables
+            - called by views/dataTables.html
+        """
+
+        T = current.T
+        scripts = ['''i18n.sortAscending="%s"''' % T("activate to sort column ascending"),
+                   '''i18n.sortDescending="%s"''' % T("activate to sort column descending"),
+                   '''i18n.first="%s"''' % T("First"),
+                   '''i18n.last="%s"''' % T("Last"),
+                   '''i18n.next="%s"''' % T("Next"),
+                   '''i18n.previous="%s"''' % T("Previous"),
+                   '''i18n.emptyTable="%s"''' % T("No records found"), #T("No data available in table"),
+                   '''i18n.info="%s"''' % T("Showing _START_ to _END_ of _TOTAL_ entries"),
+                   '''i18n.infoEmpty="%s"''' % T("Showing 0 to 0 of 0 entries"),
+                   '''i18n.infoFiltered="%s"''' % T("(filtered from _MAX_ total entries)"),
+                   '''i18n.infoThousands="%s"''' % current.deployment_settings.get_L10n_thousands_separator(),
+                   '''i18n.lengthMenu="%s"''' % (T("Show %(number)s entries") % {"number": "_MENU_"}),
+                   '''i18n.loadingRecords="%s"''' % T("Loading"),
+                   '''i18n.processing="%s"''' % T("Processing"),
+                   '''i18n.search="%s"''' % T("Search"),
+                   '''i18n.zeroRecords="%s"''' % T("No matching records found"),
+                   '''i18n.selectAll="%s"''' % T("Select All")
+                   ]
+        script = "\n".join(scripts)
+
+        return script
 
     # -------------------------------------------------------------------------
     def json(self,
              totalrows,
              displayrows,
              id,
-             sEcho,
+             draw,
              stringify=True,
              **attr
              ):
@@ -254,7 +261,7 @@ class S3DataTable(object):
             @param displayrows: The total rows in the filtered query.
             @param id: The id of the table for which this ajax call will
                        respond to.
-            @param sEcho: An unaltered copy of sEcho sent from the client used
+            @param draw: An unaltered copy of draw sent from the client used
                           by dataTables as a draw count.
             @param attr: dictionary of attributes which can be passed in
                    dt_action_col: The column where the action buttons will be placed
@@ -288,7 +295,7 @@ class S3DataTable(object):
         return self.aadata(totalrows,
                            displayrows,
                            id,
-                           sEcho,
+                           draw,
                            flist,
                            action_col=action_col,
                            stringify=stringify,
@@ -301,17 +308,21 @@ class S3DataTable(object):
     def getConfigData():
         """
             Method to extract the configuration data from S3 globals and
-            store them as an attr variable
+            store them as an attr variable.
+            - used by Survey module
 
             @return: dictionary of attributes which can be passed into html()
 
             @param attr: dictionary of attributes which can be passed in
-                   dt_displayLength : The default number of records that will be shown
+                   dt_pageLength : The default number of records that will be shown
                    dt_pagination: Enable pagination
-                   dt_pagination_type: type of pagination, either:
-                                        (default) full_numbers
-                                        OR two_button
-                   dt_bFilter: Enable or disable filtering of data.
+                   dt_pagingType: type of pagination, one of:
+                                        simple
+                                        simple_numbers
+                                        full
+                                        full_numbers (default)
+                                  http://datatables.net/reference/option/pagingType
+                   dt_searching: Enable or disable filtering of data.
                    dt_group: The colum that is used to group the data
                    dt_ajax_url: The URL to be used for the Ajax call
                    dt_action_col: The column where the action buttons will be placed
@@ -336,17 +347,19 @@ class S3DataTable(object):
             attr.dt_actions = s3.actions
         if s3.dataTableBulkActions:
             attr.dt_bulk_actions = s3.dataTableBulkActions
-        if s3.dataTable_iDisplayLength:
-            attr.dt_displayLength = s3.dataTable_iDisplayLength
+        if s3.dataTable_pageLength:
+            attr.dt_pageLength = s3.dataTable_pageLength
         attr.dt_pagination = "false" if s3.no_sspag else "true"
-        if s3.dataTable_sPaginationType:
-            attr.dt_pagination_type = s3.dataTable_sPaginationType
+        # Nothing using currently
+        #if s3.dataTable_pagingType:
+        #    attr.dt_pagingType = s3.dataTable_pagingType
         if s3.dataTable_group:
             attr.dt_group = s3.dataTable_group
-        if s3.dataTable_NobFilter:
-            attr.dt_bFilter = not s3.dataTable_NobFilter
-        if s3.dataTable_sDom:
-            attr.dt_sDom = s3.dataTable_sDom
+        # Nothing using currently
+        #if s3.dataTable_NoSearch:
+        #    attr.dt_searching = not s3.dataTable_NoSearch
+        if s3.dataTable_dom:
+            attr.dt_dom = s3.dataTable_dom
         if s3.dataTableDisplay:
             attr.dt_display = s3.dataTableDisplay
         if s3.dataTableStyleDisabled or s3.dataTableStyleWarning or s3.dataTableStyleAlert:
@@ -361,154 +374,100 @@ class S3DataTable(object):
 
     # -------------------------------------------------------------------------
     @staticmethod
-    def getControlData(rfields, vars):
-        """
-            Method that will return the orderby and filter from the vars
-            returned by the browser, from an ajax call.
-
-            @param rfields: A list of S3Resourcefield
-            @param vars: A list of variables sent from the dataTable
-        """
-
-        # @todo: does not sort properly in option fields nor FK references
-        if not vars.iSortingCols:
-            return (False, "")
-
-        sort_cols = int(vars.iSortingCols)
-        orderby = False
-        for x in range(sort_cols):
-            index = int(vars["iSortCol_%s" % x])
-            f = rfields[index].field
-            if vars["sSortDir_%s" % x] == "desc":
-                f = ~f
-            if not orderby:
-                orderby = f
-            else:
-                orderby |= f
-        # @todo: does not search properly in option fields nor FK references
-        words = vars.sSearch
-        if not words:
-            return (orderby, "")
-        words = words.split()
-        query = None
-        for rf in rfields:
-            if rf.ftype in ("string", "text") :
-                if not query:
-                    query = rf.field.contains(words)
-                else:
-                    query |= (rf.field.contains(words))
-
-        return (orderby, query)
-
-    # -------------------------------------------------------------------------
-    @staticmethod
-    def listFormats(id, rfields=None, permalink=None):
+    def export_formats(rfields=None, permalink=None, base_url=None):
         """
             Calculate the export formats that can be added to the table
 
-            @param id: The unique dataTabel ID
-            @param rfields: optional list of rfields
+            @param id: the unique dataTable ID
+            @param rfields: optional list of field selectors for exports
+            @param permalink: search result URL
+            @param base_url: the base URL of the datatable (without
+                             method or query vars) to construct format URLs
         """
 
         T = current.T
         s3 = current.response.s3
         request = current.request
-        application = request.application
 
-        # @todo: this needs rework
-        #        - formatRequest must remove the "search" method
-        #        - other data formats could have other list_fields,
-        #          hence applying the datatable sorting/filters is
-        #          not transparent
+        if base_url is None:
+            base_url = request.url
+
+        # @todo: other data formats could have other list_fields,
+        #        so position-based datatable sorting/filters may
+        #        be applied wrongly
         if s3.datatable_ajax_source:
-            end = s3.datatable_ajax_source.find(".aadata")
-            default_url = s3.datatable_ajax_source[:end] # strip '.aadata' extension
+            default_url = s3.datatable_ajax_source
         else:
-            default_url = request.url
+            default_url = base_url
+
+        # Strip format extensions (e.g. .aadata or .iframe)
+        default_url = re.sub(r"(\/[a-zA-Z0-9_]*)(\.[a-zA-Z]*)", r"\g<1>", default_url)
 
         # Keep any URL filters
-        vars = request.get_vars
-        if vars:
-            default_url = "%s?" % default_url
-            for var in vars:
-                default_url = "%s%s=%s&" % (default_url, var, vars[var])
+        get_vars = request.get_vars
+        if get_vars:
+            query = "&".join("%s=%s" % (k, v) for k, v in get_vars.items())
+            default_url = "%s?%s" % (default_url, query)
 
-        iconList = []
-        formats = s3.formats
-        export_formats = current.deployment_settings.get_ui_export_formats()
-        if "pdf" in export_formats:
-            url = formats.pdf if formats.pdf else default_url
-            iconList.append(IMG(_src="/%s/static/img/pdficon_small.gif" % application,
-                                _onclick="S3.dataTables.formatRequest('pdf','%s','%s');" % (id, url),
-                                _alt=T("Export in PDF format"),
-                                _title=T("Export in PDF format"),
-                                ))
-        if "xls" in export_formats:
-            url = formats.xls if formats.xls else default_url
-            iconList.append(IMG(_src="/%s/static/img/icon-xls.png" % application,
-                                _onclick="S3.dataTables.formatRequest('xls','%s','%s');" % (id, url),
-                                _alt=T("Export in XLS format"),
-                                _title=T("Export in XLS format"),
-                                ))
-        if "rss" in export_formats:
-            url = formats.rss if formats.rss else default_url
-            iconList.append(IMG(_src="/%s/static/img/RSS_16.png" % application,
-                                _onclick="S3.dataTables.formatRequest('rss','%s','%s');" % (id, url),
-                                _alt=T("Export in RSS format"),
-                                _title=T("Export in RSS format"),
-                                ))
-        if "xml" in export_formats:
-            url = formats.xml if formats.xml else default_url
-            iconList.append(IMG(_src="/%s/static/img/icon-xml.png" % application,
-                                _onclick="S3.dataTables.formatRequest('xml','%s','%s');" % (id, url),
-                                _alt=T("Export in XML format"),
-                                _title=T("Export in XML format"),
+        # Construct row of export icons
+        # @note: icons appear in reverse order due to float-right
+        icons = SPAN(_class = "list_formats")
+
+        settings = current.deployment_settings
+        export_formats = settings.get_ui_export_formats()
+        if export_formats:
+
+            icons.append("%s:" % T("Export as"))
+
+            formats = dict(s3.formats)
+
+            # Auto-detect KML fields
+            if "kml" not in formats and rfields:
+                kml_fields = set(["location_id", "site_id"])
+                if any(rfield.fname in kml_fields for rfield in rfields):
+                    formats["kml"] = default_url
+
+            default_formats = ("xml", "rss", "xls", "pdf")
+            EXPORT = T("Export in %(format)s format")
+
+            append_icon = icons.append
+            for fmt in export_formats:
+
+                # Export format URL
+                if fmt in default_formats:
+                    url = formats.get(fmt, default_url)
+                else:
+                    url = formats.get(fmt)
+                if not url:
+                    continue
+
+                # Onhover title for the icon
+                if fmt == "map":
+                    title = T("Show on Map")
+                else:
+                    title = EXPORT % dict(format=fmt.upper())
+
+                append_icon(DIV(_class="dt-export export_%s" % fmt,
+                                _title=title,
+                                data = {"url": url,
+                                        "extension": fmt,
+                                        },
                                 ))
 
-        div = DIV(_class='list_formats')
+        export_options = DIV(_class="dt-export-options")
+
+        # Append the permalink (if any)
         if permalink is not None:
-            link = A(T("Link to this result"),
+            link = A(settings.get_ui_label_permalink(),
                      _href=permalink,
                      _class="permalink")
-            div.append(link)
-            div.append(" | ")
+            export_options.append(link)
+            export_options.append(" | ")
 
-        div.append(current.T("Export to:"))
-        if "have" in formats and "have" in export_formats:
-            iconList.append(IMG(_src="/%s/static/img/have_16.png" % application,
-                                _onclick="S3.dataTables.formatRequest('have','%s','%s');" % (id, formats.have),
-                                _alt=T("Export in HAVE format"),
-                                _title=T("Export in HAVE format"),
-                                ))
-        if "kml" in export_formats:
-            if "kml" in formats:
-                iconList.append(IMG(_src="/%s/static/img/kml_icon.png" % application,
-                                    _onclick="S3.dataTables.formatRequest('kml','%s','%s');" % (id, formats.kml),
-                                    _alt=T("Export in KML format"),
-                                    _title=T("Export in KML format"),
-                                    ))
-            elif rfields:
-                kml_list = ["location_id",
-                            "site_id",
-                            ]
-                for r in rfields:
-                    if r.fname in kml_list:
-                        iconList.append(IMG(_src="/%s/static/img/kml_icon.png" % application,
-                                            _onclick="S3.dataTables.formatRequest('kml','%s','%s');" % (id, default_url),
-                                            _alt=T("Export in KML format"),
-                                            _title=T("Export in KML format"),
-                                            ))
-                        break
-        if "map" in formats and "map" in export_formats:
-            iconList.append(IMG(_src="/%s/static/img/map_icon.png" % application,
-                                _onclick="S3.dataTables.formatRequest('map','%s','%s');" % (id, formats.map),
-                                _alt=T("Show on map"),
-                                _title=T("Show on map"),
-                                ))
+        # Append the icons
+        export_options.append(icons)
 
-        for icon in iconList:
-            div.append(icon)
-        return div
+        return export_options
 
     # -------------------------------------------------------------------------
     @staticmethod
@@ -526,19 +485,21 @@ class S3DataTable(object):
             @param custom_actions: custom actions as list of dicts like
                                    {"label":label, "url":url, "_class":class},
                                    will be appended to the default actions
+
+            @ToDo: DRY with S3CRUD.action_buttons()
         """
 
         from s3crud import S3CRUD
 
+        s3 = current.response.s3
         auth = current.auth
-        actions = current.response.s3.actions
+        actions = s3.actions = None
 
         table = resource.table
-        actions = None
         has_permission = auth.s3_has_permission
         ownership_required = auth.permission.ownership_required
 
-        labels = current.manager.LABEL
+        labels = s3.crud_labels
         args = ["[id]"]
 
         # Choose controller/function to link to
@@ -549,26 +510,36 @@ class S3DataTable(object):
             c = resource.prefix
             f = resource.name
 
+        tablename = resource.tablename
+        get_config = current.s3db.get_config
+
         # "Open" button
-        if has_permission("update", table) and \
+        editable = get_config(tablename, "editable", True)
+        if editable and has_permission("update", table) and \
            not ownership_required("update", table):
             update_url = URL(c=c, f=f, args=args + ["update"])
-            S3CRUD.action_button(labels.UPDATE, update_url)
+            S3CRUD.action_button(labels.UPDATE, update_url,
+                                 icon = "edit",
+                                 _class="action-btn edit")
         else:
             read_url = URL(c=c, f=f, args=args)
-            S3CRUD.action_button(labels.READ, read_url)
-        # Delete action
+            S3CRUD.action_button(labels.READ, read_url,
+                                 icon = "file",
+                                 _class="action-btn read")
+
+        # Delete button
         # @todo: does not apply selective action (renders DELETE for
         #        all items even if the user is only permitted to delete
         #        some of them) => should implement "restrict", see
         #        S3CRUD.action_buttons
-        deletable = current.s3db.get_config(resource.tablename, "deletable",
-                                            True)
+        deletable = get_config(tablename, "deletable", True)
         if deletable and \
            has_permission("delete", table) and \
            not ownership_required("delete", table):
-            delete_url = URL(c=c, f=f, args = args + ["delete"])
-            S3CRUD.action_button(labels.DELETE, delete_url)
+            delete_url = URL(c=c, f=f, args=args + ["delete"])
+            S3CRUD.action_button(labels.DELETE, delete_url,
+                                 icon = "delete",
+                                 _class="delete-btn")
 
         # Append custom actions
         if custom_actions:
@@ -581,26 +552,25 @@ class S3DataTable(object):
                    orderby,
                    rfields = None,
                    cache = None,
-                   filteredrows = None,
                    **attr
                    ):
         """
-            Method to wrap the html for a dataTable in a form, the list of formats
-            used for data export and add the config details required by dataTables,
+            Method to wrap the html for a dataTable in a form, add the export formats
+            and the config details required by dataTables
 
             @param html: The html table
             @param id: The id of the table
-            @param orderby: the sort details see aaSort at http://datatables.net/ref
+            @param orderby: the sort details see http://datatables.net/reference/option/order
             @param rfields: The list of resource fields
             @param attr: dictionary of attributes which can be passed in
                    dt_lengthMenu: The menu options for the number of records to be shown
-                   dt_displayLength : The default number of records that will be shown
-                   dt_sDom : The Datatable DOM initialisation variable, describing
-                             the order in which elements are displayed.
-                             See http://datatables.net/ref for more details.
+                   dt_pageLength : The default number of records that will be shown
+                   dt_dom : The Datatable DOM initialisation variable, describing
+                            the order in which elements are displayed.
+                            See http://datatables.net/ref for more details.
                    dt_pagination : Is pagination enabled, dafault 'true'
-                   dt_pagination_type : How the pagination buttons are displayed
-                   dt_bFilter: Enable or disable filtering of data.
+                   dt_pagingType : How the pagination buttons are displayed
+                   dt_searching: Enable or disable filtering of data.
                    dt_ajax_url: The URL to be used for the Ajax call
                    dt_action_col: The column where the action buttons will be placed
                    dt_bulk_actions: list of labels for the bulk actions.
@@ -629,57 +599,70 @@ class S3DataTable(object):
                                      two types are supported, 'individulal' and 'accordion'
                    dt_group_types: The type of indicator for groups that can be 'shrunk'
                                    Permitted valies are: 'icon' (the default) 'text' and 'none'
+                   dt_base_url: base URL to construct export format URLs, resource
+                                default URL without any URL method or query part
+
             @global current.response.s3.actions used to get the RowActions
         """
 
-        from gluon.serializers import json
+        from gluon.serializers import json as jsons
 
-        request = current.request
         s3 = current.response.s3
+        settings = current.deployment_settings
 
         dataTableID = s3.dataTableID
         if not dataTableID or not isinstance(dataTableID, list):
             dataTableID = s3.dataTableID = [id]
         elif id not in dataTableID:
             dataTableID.append(id)
+
         # The configuration parameter from the server to the client will be
         # sent in a json object stored in an hidden input field. This object
         # will then be parsed by s3.dataTable.js and the values used.
         config = Storage()
         config.id = id
-        config.lengthMenu = attr.get("dt_lengthMenu",
-                                     [[ 25, 50, -1], [ 25, 50, str(current.T("All"))]]
-                                     )
-        config.displayLength = attr.get("dt_displayLength",
-                                        current.manager.ROWSPERPAGE)
-        config.sDom = attr.get("dt_sDom", 'fril<"dataTable_table"t>pi')
-        config.pagination = attr.get("dt_pagination", "true")
-        config.paginationType = attr.get("dt_pagination_type", "full_numbers")
-        config.bFilter = attr.get("dt_bFilter", "true")
-        config.ajaxUrl = attr.get("dt_ajax_url", URL(c=request.controller,
-                                                     f=request.function,
-                                                     extension="aadata",
-                                                     args=request.args,
-                                                     vars=request.get_vars,
-                                                     ))
-        config.rowStyles = attr.get("dt_styles", [])
+        _aget = attr.get
+        config.dom = _aget("dt_dom", settings.get_ui_datatables_dom())
+        config.lengthMenu = _aget("dt_lengthMenu",
+                                  [[25, 50, -1],
+                                   [25, 50, str(current.T("All"))]
+                                   ]
+                                  )
+        config.pageLength = _aget("dt_pageLength", s3.ROWSPERPAGE)
+        config.pagination = _aget("dt_pagination", "true")
+        config.pagingType = _aget("dt_pagingType",
+                                  settings.get_ui_datatables_pagingType())
+        config.searching = _aget("dt_searching", "true")
 
+        ajaxUrl = _aget("dt_ajax_url", None)
+        if not ajaxUrl:
+            request = current.request
+            url = URL(c=request.controller,
+                      f=request.function,
+                      args=request.args,
+                      vars=request.get_vars,
+                      )
+            ajaxUrl = s3_set_extension(url, "aadata")
+        config.ajaxUrl = ajaxUrl
 
-        rowActions = s3.actions
+        config.rowStyles = _aget("dt_styles", [])
+
+        rowActions = _aget("dt_row_actions", s3.actions)
         if rowActions:
             config.rowActions = rowActions
         else:
             config.rowActions = []
-        bulkActions = attr.get("dt_bulk_actions", None)
+        bulkActions = _aget("dt_bulk_actions", None)
         if bulkActions and not isinstance(bulkActions, list):
             bulkActions = [bulkActions]
         config.bulkActions = bulkActions
-        config.bulkCol = bulkCol = attr.get("dt_bulk_col", 0)
-        action_col = attr.get("dt_action_col", 0)
+        config.bulkCol = bulkCol = _aget("dt_bulk_col", 0)
+        action_col = _aget("dt_action_col", 0)
         if bulkActions and bulkCol <= action_col:
             action_col += 1
         config.actionCol = action_col
-        group_list = attr.get("dt_group", [])
+
+        group_list = _aget("dt_group", [])
         if not isinstance(group_list, list):
             group_list = [group_list]
         dt_group = []
@@ -690,51 +673,79 @@ class S3DataTable(object):
                 group -= 1
             dt_group.append([group, "asc"])
         config.group = dt_group
-        config.groupTotals = attr.get("dt_group_totals", [])
-        config.groupTitles = attr.get("dt_group_titles", [])
-        config.groupSpacing = attr.get("dt_group_space", "false")
+        config.groupTotals = _aget("dt_group_totals", [])
+        config.groupTitles = _aget("dt_group_titles", [])
+        config.groupSpacing = _aget("dt_group_space", "false")
         for order in orderby:
             if bulkActions:
                 if bulkCol <= order[0]:
                     order[0] += 1
-            if action_col >= order[0]:
+            if action_col > 0 and action_col >= order[0]:
                 order[0] -= 1
-        config.aaSort = orderby
-        config.textMaxLength = attr.get("dt_text_maximum_len", 80)
-        config.textShrinkLength = attr.get("dt_text_condense_len", 75)
-        config.shrinkGroupedRows = attr.get("dt_shrink_groups", "false")
-        config.groupIcon = attr.get("dt_group_types", [])
+        config.order = orderby
+        config.textMaxLength = _aget("dt_text_maximum_len", 80)
+        config.textShrinkLength = _aget("dt_text_condense_len", 75)
+        config.shrinkGroupedRows = _aget("dt_shrink_groups", "false")
+        config.groupIcon = _aget("dt_group_types", [])
+
         # Wrap the table in a form and add some data in hidden fields
-        form = FORM()
+        form = FORM(_class="dt-wrapper")
         if not s3.no_formats and len(html) > 0:
-            permalink = attr.get("dt_permalink", None)
-            form.append(S3DataTable.listFormats(id, rfields,
-                                                permalink=permalink))
+            # @todo: always *render* both export options and permalink,
+            #        even if the initial table is empty, so that
+            #        Ajax-update can unhide them once there are results
+            # @todo: move export-format update into drawCallback()
+            # @todo: poor UX with onclick-JS, better to render real
+            #        links which can be bookmarked, and then update them
+            #        in drawCallback()
+            permalink = _aget("dt_permalink", None)
+            base_url = _aget("dt_base_url", None)
+            export_formats = S3DataTable.export_formats(rfields,
+                                                        permalink=permalink,
+                                                        base_url=base_url)
+            # Nb These can be moved around in initComplete()
+            form.append(export_formats)
+
         form.append(html)
+
         # Add the configuration details for this dataTable
         form.append(INPUT(_type="hidden",
                           _id="%s_configurations" % id,
                           _name="config",
-                          _value=json(config)))
+                          _value=jsons(config)))
+
         # If we have a cache set up then pass it in
         if cache:
             form.append(INPUT(_type="hidden",
                               _id="%s_dataTable_cache" %id,
                               _name="cache",
-                              _value=json(cache)))
+                              _value=jsons(cache)))
+
         # If we have bulk actions then add the hidden fields
-        if config.bulkActions:
+        if bulkActions:
             form.append(INPUT(_type="hidden",
                               _id="%s_dataTable_bulkMode" % id,
                               _name="mode",
                               _value="Inclusive"))
-            bulk_selected = attr.get("dt_bulk_selected", "")
+            bulk_selected = _aget("dt_bulk_selected", "")
             if isinstance(bulk_selected, list):
                 bulk_selected = ",".join(bulk_selected)
             form.append(INPUT(_type="hidden",
                               _id="%s_dataTable_bulkSelection" % id,
                               _name="selected",
                               _value="[%s]" % bulk_selected))
+            form.append(INPUT(_type="hidden",
+                              _id="%s_dataTable_filterURL" % id,
+                              _class="dataTable_filterURL",
+                              _name="filterURL",
+                              _value="%s" % config.ajaxUrl))
+
+        # Set callback?
+        initComplete = settings.get_ui_datatables_initComplete()
+        if initComplete:
+            # Processed in views/dataTables.html
+            s3.dataTable_initComplete = initComplete
+
         return form
 
     # -------------------------------------------------------------------------
@@ -792,6 +803,8 @@ class S3DataTable(object):
                         tr.append(TD(row[field]))
                 body.append(tr)
         table = TABLE([header, body], _id=id, _class="dataTable display")
+        if current.deployment_settings.get_ui_datatables_responsive():
+            table.add_class("responsive")
         return table
 
     # -------------------------------------------------------------------------
@@ -799,7 +812,7 @@ class S3DataTable(object):
                totalrows,
                displayrows,
                id,
-               sEcho,
+               draw,
                flist,
                stringify=True,
                action_col=None,
@@ -812,7 +825,7 @@ class S3DataTable(object):
             @param displayrows: The total rows in the filtered query.
             @param id: The id of the table for which this ajax call will
                        respond to.
-            @param sEcho: An unaltered copy of sEcho sent from the client used
+            @param draw: An unaltered copy of draw sent from the client used
                           by dataTables as a draw count.
             @param flist: The list of fields
             @param attr: dictionary of attributes which can be passed in
@@ -849,13 +862,13 @@ class S3DataTable(object):
         structure["dataTable_filter"] = self.filterString
         structure["dataTable_groupTotals"] = attr.get("dt_group_totals", [])
         structure["dataTable_sort"] = self.orderby
-        structure["aaData"] = aadata
-        structure["iTotalRecords"] = totalrows
-        structure["iTotalDisplayRecords"] = displayrows
-        structure["sEcho"] = sEcho
+        structure["data"] = aadata
+        structure["recordsTotal"] = totalrows
+        structure["recordsFiltered"] = displayrows
+        structure["draw"] = draw
         if stringify:
-            from gluon.serializers import json
-            return json(structure)
+            from gluon.serializers import json as jsons
+            return jsons(structure)
         else:
             return structure
 
@@ -873,38 +886,39 @@ class S3DataList(object):
                  start=None,
                  limit=None,
                  total=None,
-                 listid=None,
+                 list_id=None,
                  layout=None,
                  row_layout=None):
         """
             Constructor
 
             @param resource: the S3Resource
-            @param list_fields: the list fields (list of field selector strings)
+            @param list_fields: the list fields
+                                (list of field selector strings)
             @param records: the records
             @param start: index of the first item
             @param limit: maximum number of items
             @param total: total number of available items
-            @param listid: the HTML ID for this list
-            @param layout: item renderer (optional) as
-                           function(listid, resource, rfields, record)
+            @param list_id: the HTML ID for this list
+            @param layout: item renderer (optional) as function
+                           (list_id, item_id, resource, rfields, record)
             @param row_layout: row renderer (optional) as
-                               function(listid, resource, rowsize, items)
+                               function(list_id, resource, rowsize, items)
         """
 
         self.resource = resource
         self.list_fields = list_fields
         self.records = records
 
-        if listid is None:
-            self.listid = "datalist"
+        if list_id is None:
+            self.list_id = "datalist"
         else:
-            self.listid = listid
+            self.list_id = list_id
 
         if layout is not None:
             self.layout = layout
         else:
-            self.layout = self.render
+            self.layout = S3DataListLayout()
         self.row_layout = row_layout
 
         self.start = start if start else 0
@@ -917,7 +931,11 @@ class S3DataList(object):
              limit=None,
              pagesize=None,
              rowsize=None,
-             ajaxurl=None):
+             ajaxurl=None,
+             empty=None,
+             popup_url=None,
+             popup_title=None,
+             ):
         """
             Render list data as HTML (nested DIVs)
 
@@ -926,6 +944,9 @@ class S3DataList(object):
             @param pagesize: maximum number of items per page
             @param rowsize: number of items per row
             @param ajaxurl: the URL to Ajax-update the datalist
+            @param popup_url: the URL for the modal used for the 'more'
+                              button (=> we deactivate InfiniteScroll)
+            @param popup_title: the title for the modal
         """
 
         T = current.T
@@ -933,27 +954,54 @@ class S3DataList(object):
         list_fields = self.list_fields
         rfields = resource.resolve_selectors(list_fields)[0]
 
-        listid = self.listid
+        list_id = self.list_id
         render = self.layout
         render_row = self.row_layout
 
         if not rowsize:
             rowsize = 1
-        
+
+        pkey = str(resource._id)
+
         records = self.records
         if records is not None:
-            items = [
-                DIV(T("Total Records: %(numrows)s") % {"numrows": self.total},
-                    _class="dl-header",
-                    _id="%s-header" % listid)
-            ]
-            
+
+            # Call prep if present
+            if hasattr(render, "prep"):
+                render.prep(resource, records)
+
+            if current.response.s3.dl_no_header:
+                items = []
+            else:
+                items = [DIV(T("Total Records: %(numrows)s") % \
+                                {"numrows": self.total},
+                             _class="dl-header",
+                             _id="%s-header" % list_id,
+                             )
+                         ]
+
+            if empty is None:
+                empty = resource.crud.crud_string(resource.tablename,
+                                                  "msg_no_match")
+            empty = DIV(empty, _class="dl-empty")
+            if self.total > 0:
+                empty.update(_style="display:none")
+            items.append(empty)
+
             row_idx = int(self.start / rowsize) + 1
             for group in self.groups(records, rowsize):
                 row = []
                 col_idx = 0
                 for record in group:
-                    item = render(listid,
+
+                    if pkey in record:
+                        item_id = "%s-%s" % (list_id, record[pkey])
+                    else:
+                        # template
+                        item_id = "%s-[id]" % list_id
+
+                    item = render(list_id,
+                                  item_id,
                                   resource,
                                   rfields,
                                   record)
@@ -965,7 +1013,7 @@ class S3DataList(object):
 
                 _class = "dl-row %s" % ((row_idx % 2) and "even" or "odd")
                 if render_row:
-                    row = render_row(listid,
+                    row = render_row(list_id,
                                      resource,
                                      rowsize,
                                      row)
@@ -980,26 +1028,39 @@ class S3DataList(object):
             # template
             raise NotImplementedError
 
-        dl = DIV(items, _class = "dl", _id = listid)
+        dl = DIV(items,
+                 _class="dl",
+                 _id=list_id,
+                 )
 
         dl_data = {"startindex": start,
                    "maxitems": limit,
                    "totalitems": self.total,
                    "pagesize": pagesize,
                    "rowsize": rowsize,
-                   "ajaxurl": ajaxurl
+                   "ajaxurl": ajaxurl,
                    }
+        if popup_url:
+            input_class = "dl-pagination"
+            a_class = "s3_modal"
+            #dl_data["popup_url"] = popup_url
+            #dl_data["popup_title"] = popup_title
+        else:
+            input_class = "dl-pagination dl-scroll"
+            a_class = ""
         from gluon.serializers import json as jsons
         dl_data = jsons(dl_data)
-        dl.append(DIV(
-                    FORM(
-                        INPUT(_type="hidden",
-                              _class="dl-pagination",
-                              _value=dl_data)),
-                    A(T("more..."),
-                      _href=ajaxurl,
-                      _class="dl-pagination"),
-                    _class="dl-navigation"))
+        dl.append(DIV(FORM(INPUT(_type="hidden",
+                                 _class=input_class,
+                                 _value=dl_data)
+                           ),
+                      A(T("more..."),
+                        _href=popup_url or ajaxurl,
+                        _class=a_class,
+                        _title=popup_title,
+                        ),
+                      _class="dl-navigation",
+                      ))
 
         return dl
 
@@ -1019,1233 +1080,158 @@ class S3DataList(object):
             yield group
             group = list(islice(iterable, length))
         raise StopIteration
-            
-    # ---------------------------------------------------------------------
-    @staticmethod
-    def render(listid, resource, rfields, record, **attr):
-        """
-            Default item renderer
 
-            @param listid: the HTML ID for this list
+# =============================================================================
+class S3DataListLayout(object):
+    """ DataList default layout """
+
+    item_class = "thumbnail"
+
+    # ---------------------------------------------------------------------
+    def __init__(self, profile=None):
+        """
+            Constructor
+
+            @param profile: table name of the master resource of the
+                            profile page (if used for a profile), can be
+                            used in popup URLs to indicate the master
+                            resource
+        """
+
+        self.profile = profile
+
+    # ---------------------------------------------------------------------
+    def __call__(self, list_id, item_id, resource, rfields, record):
+        """
+            Wrapper for render_item.
+
+            @param list_id: the HTML ID of the list
+            @param item_id: the HTML ID of the item
             @param resource: the S3Resource to render
             @param rfields: the S3ResourceFields to render
             @param record: the record as dict
-            @param attr: additional HTML attributes for the item
         """
 
-        pkey = str(resource._id)
-
-        # Construct the item ID
-        if pkey in record:
-            item_id = "%s-%s" % (listid, record[pkey])
-        else:
-            # template
-            item_id = "%s-[id]" % listid
-
-        # Add classes passed from caller (e.g. even/odd)
-        item_class = "dl-item"
-        caller_class = attr.get("_class", None)
-        if caller_class:
-            item_class = "%s %s" % (item_class, caller_class)
-
         # Render the item
-        item = DIV(_class=item_class, _id=item_id)
-        for rfield in rfields:
+        item = DIV(_id=item_id, _class=self.item_class)
 
-            if not rfield.show:
-                continue
+        header = self.render_header(list_id,
+                                    item_id,
+                                    resource,
+                                    rfields,
+                                    record)
+        if header is not None:
+            item.append(header)
 
-            colname = rfield.colname
-            if colname == pkey or colname not in record:
-                continue
-            value = record[colname]
-            value_id = "%s-%s" % (item_id, rfield.colname.replace(".", "_"))
-
-            table_class = "%s-tbl-%s" % (listid, rfield.tname)
-            field_class = "%s-fld-%s" % (listid, rfield.fname)
-
-            label = LABEL("%s:" % rfield.label,
-                          _for = value_id,
-                          _class = "dl-field-label")
-            item.append(DIV(label,
-                            DIV(value,
-                                _class = "dl-field-value",
-                                _id = value_id),
-                            _class = "dl-field %s %s" % (table_class,
-                                                         field_class)))
+        body = self.render_body(list_id,
+                                item_id,
+                                resource,
+                                rfields,
+                                record)
+        if body is not None:
+            item.append(body)
 
         return item
 
-# =============================================================================
-class S3PivotTable(object):
-    """ Class representing a pivot table of a resource """
-
-    #: Supported aggregation methods
-    METHODS = {"list": "List",
-               "count": "Count",
-               "min": "Minimum",
-               "max": "Maximum",
-               "sum": "Total",
-               "avg": "Average",
-               #"std": "Standard Deviation"
-               }
-
-    def __init__(self, resource, rows, cols, layers):
+    # ---------------------------------------------------------------------
+    def render_header(self, list_id, item_id, resource, rfields, record):
         """
-            Constructor - extracts all unique records, generates a
-            pivot table from them with the given dimensions and
-            computes the aggregated values for each cell.
+            @todo: Render the card header
 
-            @param resource: the S3Resource
-            @param rows: field selector for the rows dimension
-            @param cols: field selector for the columns dimension
-            @param layers: list of tuples of (field selector, method)
-                           for the value aggregation(s)
+            @param list_id: the HTML ID of the list
+            @param item_id: the HTML ID of the item
+            @param resource: the S3Resource to render
+            @param rfields: the S3ResourceFields to render
+            @param record: the record as dict
         """
 
-        # Initialize ----------------------------------------------------------
-        #
-        if not rows and not cols:
-            raise SyntaxError("No rows or columns specified for pivot table")
+        #DIV(
+            #ICON("icon"),
+            #SPAN(" %s" % title, _class="card-title"),
+            #toolbox,
+            #_class="card-header",
+        #),
+        return None
 
-        self.resource = resource
+    # ---------------------------------------------------------------------
+    def render_body(self, list_id, item_id, resource, rfields, record):
+        """
+            Render the card body
 
-        self.lfields = None
-        self.dfields = None
-        self.rfields = None
-
-        self.rows = rows
-        self.cols = cols
-        self.layers = layers
-
-        # API variables -------------------------------------------------------
-        #
-        self.records = None
-        """ All records in the pivot table as a Storage like:
-                {
-                 <record_id>: <Row>
-                }
+            @param list_id: the HTML ID of the list
+            @param item_id: the HTML ID of the item
+            @param resource: the S3Resource to render
+            @param rfields: the S3ResourceFields to render
+            @param record: the record as dict
         """
 
-        self.empty = False
-        """ Empty-flag (True if no records could be found) """
-        self.numrows = None
-        """ The number of rows in the pivot table """
-        self.numcols = None
-        """ The number of columns in the pivot table """
+        pkey = str(resource._id)
+        body = DIV(_class="media-body")
 
-        self.cell = None
-        """ Array of pivot table cells in [rows[columns]]-order, each
-            cell is a Storage like:
-                {
-                 records: <list_of_record_ids>,
-                 (<fact>, <method>): <aggregated_value>, ...per layer
-                }
+        render_column = self.render_column
+        for rfield in rfields:
+
+            if not rfield.show or rfield.colname == pkey:
+                continue
+
+            column = render_column(item_id, rfield, record)
+            if column is not None:
+                table_class = "dl-table-%s" % rfield.tname
+                field_class = "dl-field-%s" % rfield.fname
+                body.append(DIV(column,
+                                _class = "dl-field %s %s" % (table_class,
+                                                             field_class)))
+
+        return DIV(body, _class="media")
+
+    # ---------------------------------------------------------------------
+    def render_icon(self, list_id, resource):
         """
-        self.row = None
-        """ List of row headers, each header is a Storage like:
-                {
-                 value: <dimension value>,
-                 records: <list_of_record_ids>,
-                 (<fact>, <method>): <total value>, ...per layer
-                }
-        """
-        self.col = None
-        """ List of column headers, each header is a Storage like:
-                {
-                 value: <dimension value>,
-                 records: <list_of_record_ids>,
-                 (<fact>, <method>): <total value>, ...per layer
-                }
-        """
-        self.totals = Storage()
-        """ The grand total values for each layer, as a Storage like:
-                {
-                 (<fact>, <method): <total value>, ...per layer
-                }
+            @todo: Render a body icon
+
+            @param list_id: the HTML ID of the list
+            @param resource: the S3Resource to render
         """
 
-        # Get the fields ------------------------------------------------------
-        #
-        tablename = resource.tablename
+        return None
 
-        # The "report_fields" table setting defines which additional
-        # fields shall be included in the report base layer. This is
-        # useful to provide easy access to the record data behind a
-        # pivot table cell.
-        fields = current.s3db.get_config(tablename, "report_fields", [])
-
-        self._get_fields(fields=fields)
-
-        if DEBUG:
-            _start = datetime.datetime.now()
-            _debug("S3PivotTable %s starting" % tablename)
-
-        # Retrieve the records ------------------------------------------------
-        #
-        result = resource.fast_select(self.rfields.keys(),
-                                      start=None, limit=None)
-        data = result["data"]
-        if data:
-
-            key = str(resource.table._id)
-            records = Storage([(i[key], i) for i in data])
-                
-            # Generate the data frame -----------------------------------------
-            #
-            gfields = self.gfields
-            pkey_colname = gfields[self.pkey]
-            rows_colname = gfields[self.rows]
-            cols_colname = gfields[self.cols]
-            
-            dataframe = []
-            insert = dataframe.append
-            expand = self._expand
-
-            for _id in records:
-                row = records[_id]
-                item = {key: _id}
-                if rows_colname:
-                    item[rows_colname] = row[rows_colname]
-                if cols_colname:
-                    item[cols_colname] = row[cols_colname]
-                dataframe.extend(expand(item))
-                
-            self.records = records
-
-            #if DEBUG:
-                #duration = datetime.datetime.now() - _start
-                #duration = '{:.2f}'.format(duration.total_seconds())
-                #_debug("Dataframe complete after %s seconds" % duration)
-                
-            # Group the records -----------------------------------------------
-            #
-            matrix, rnames, cnames = self._pivot(dataframe,
-                                                 pkey_colname,
-                                                 rows_colname,
-                                                 cols_colname)
-
-            #if DEBUG:
-                #duration = datetime.datetime.now() - _start
-                #duration = '{:.2f}'.format(duration.total_seconds())
-                #_debug("Pivoting complete after %s seconds" % duration)
-                
-            # Initialize columns and rows -------------------------------------
-            #
-            if cols:
-                self.col = [Storage({"value": v}) for v in cnames]
-                self.numcols = len(self.col)
-            else:
-                self.col = [Storage({"value": None})]
-                self.numcols = 1
-
-            if rows:
-                self.row = [Storage({"value": v}) for v in rnames]
-                self.numrows = len(self.row)
-            else:
-                self.row = [Storage({"value": None})]
-                self.numrows = 1
-
-            # Add the layers --------------------------------------------------
-            #
-            add_layer = self._add_layer
-            layers = list(self.layers)
-            for f, m in self.layers:
-                add_layer(matrix, f, m)
-
-            #if DEBUG:
-                #duration = datetime.datetime.now() - _start
-                #duration = '{:.2f}'.format(duration.total_seconds())
-                #_debug("Layers complete after %s seconds" % duration)
-
-        else:
-            # No items to report on -------------------------------------------
-            #
-            self.empty = True
-
-        if DEBUG:
-            duration = datetime.datetime.now() - _start
-            duration = '{:.2f}'.format(duration.total_seconds())
-            _debug("S3PivotTable completed in %s seconds" % duration)
-
-    # -------------------------------------------------------------------------
-    # API methods
-    # -------------------------------------------------------------------------
-    def __len__(self):
-        """ Total number of records in the report """
-
-        items = self.records
-        if items is None:
-            return 0
-        else:
-            return len(self.records)
-
-    # -------------------------------------------------------------------------
-    def html(self,
-             show_totals=True,
-             url=None,
-             filter_query=None,
-             **attributes):
+    # ---------------------------------------------------------------------
+    def render_toolbox(self, list_id, resource, record):
         """
-            Render this pivot table as HTML
+            @todo: Render the toolbox
 
-            @param show_totals: show totals for rows and columns
-            @param url: link cells to this base-URL
-            @param filter_query: use this S3ResourceQuery with the base-URL
-            @param attributes: the HTML attributes for the table
+            @param list_id: the HTML ID of the list
+            @param resource: the S3Resource to render
+            @param record: the record as dict
         """
 
-        T = current.T
-        TOTAL = T("Total")
+        return None
 
-        components = []
-
-        layers = self.layers
-        resource = self.resource
-        tablename = resource.tablename
-
-        cols = self.cols
-        rows = self.rows
-        numcols = self.numcols
-        numrows = self.numrows
-        rfields = self.rfields
-
-        get_label = self._get_field_label
-        get_total = self._totals
-
-        # Representation methods
-        represent_method = self._represent_method
-        cols_repr = represent_method(cols)
-        rows_repr = represent_method(rows)
-        layers_repr = dict([(f, represent_method(f)) for f, m in layers])
-
-        layer_label = None
-        col_titles = []
-        add_col_title = col_titles.append
-        col_totals = []
-        add_col_total = col_totals.append
-        row_titles = []
-        add_row_title = row_titles.append
-        row_totals = []
-        add_row_total = row_totals.append
-
-        # Layer titles:
-
-        # Get custom labels from report options
-        layer_labels = Storage()
-        report_options = resource.get_config("report_options", None)
-        if report_options and "fact" in report_options:
-            layer_opts = report_options["fact"]
-            for item in layer_opts:
-                if isinstance(item, (tuple, list)) and len(item) == 3:
-                    if not "." in item[0].split("$")[0]:
-                        item = ("%s.%s" % (resource.alias, item[0]),
-                                item[1],
-                                item[2])
-                    layer_labels[(item[0], item[1])] = item[2]
-
-        labels = []
-        get_mname = self._get_method_label
-
-        for layer in layers:
-            if layer in layer_labels:
-                # Custom label
-                label = layer_labels[layer]
-                if not labels:
-                    layer_label = label
-                labels.append(s3_unicode(label))
-            else:
-                # Construct label from field-label and method
-                label = get_label(rfields, layer[0], tablename, "fact")
-                mname = get_mname(layer[1])
-                if not labels:
-                    m = layer[1] == "list" and get_mname("count") or mname
-                    layer_label = "%s (%s)" % (label, m)
-                labels.append("%s (%s)" % (label, mname))
-
-        layers_title = TH(" / ".join(labels))
-
-        # Columns field title
-        if cols:
-            col_label = get_label(rfields, cols, tablename, "cols")
-            _colspan = numcols + 1
-        else:
-            col_label = ""
-            _colspan = numcols
-        cols_title = TH(col_label, _colspan=_colspan, _scope="col")
-
-        titles = TR(layers_title, cols_title)
-
-        # Sort dimensions:
-
-        cells = self.cell
-
-        def sortdim(dim, items):
-            """ Sort a dimension """
-
-            rfield = rfields[dim]
-            if not rfield:
-                return
-            ftype = rfield.ftype
-            sortby = "value"
-            if ftype == "integer":
-                requires = rfield.requires
-                if isinstance(requires, (tuple, list)):
-                    requires = requires[0]
-                if isinstance(requires, IS_EMPTY_OR):
-                    requires = requires.other
-                if isinstance(requires, IS_IN_SET):
-                    sortby = "text"
-            elif ftype[:9] == "reference":
-                sortby = "text"
-            items.sort(key=lambda item: item[0][sortby])
-
-        # Sort rows
-        rvals = self.row
-        rows_list = []
-        for i in xrange(numrows):
-            row = rvals[i]
-            # Add representation value of the row header
-            row["text"] = rows_repr(row.value)
-            rows_list.append((row, cells[i]))
-        sortdim(rows, rows_list)
-
-        # Sort columns
-        cvals = self.col
-        cols_list = []
-        for j in xrange(numcols):
-            column = cvals[j]
-            column["text"] = cols_repr(column.value)
-            cols_list.append((column, j))
-        sortdim(cols, cols_list)
-
-        # Build the column headers:
-
-        # Header for the row-titles column
-        row_label = get_label(rfields, rows, tablename, "rows")
-        rows_title = TH(row_label, _scope="col")
-        headers = TR(rows_title)
-
-        add_header = headers.append
-
-        # Headers for the cell columns
-        for j in xrange(numcols):
-            v = cols_list[j][0].text
-            add_col_title(s3_truncate(unicode(v)))
-            colhdr = TH(v, _scope="col")
-            add_header(colhdr)
-
-        # Header for the row-totals column
-        if show_totals and cols is not None:
-            add_header(TH(TOTAL, _class="totals_header rtotal", _scope="col"))
-
-        thead = THEAD(titles, headers)
-
-        # Render the table body:
-
-        tbody = TBODY()
-        add_row = tbody.append
-
-        # Lookup table for cell list values
-        cell_lookup_table = {} # {{}, {}}
-        cell_vals = Storage()
-
-        for i in xrange(numrows):
-
-            # Initialize row
-            _class = i % 2 and "odd" or "even"
-            tr = TR(_class=_class)
-            add_cell = tr.append
-
-            # Row header
-            row = rows_list[i][0]
-            v = row["text"]
-            add_row_title(s3_truncate(unicode(v)))
-            rowhdr = TD(v)
-            add_cell(rowhdr)
-
-            row_cells = rows_list[i][1]
-
-            # Result cells
-            for j in xrange(numcols):
-
-                cell_idx = cols_list[j][1]
-                cell = row_cells[cell_idx]
-
-                vals = []
-                cell_ids = []
-                add_value = vals.append
-                for layer_idx, layer in enumerate(layers):
-                    f, m = layer
-                    represent = layers_repr[f]
-                    value = cell[layer]
-                    if m == "list":
-                        if isinstance(value, list):
-                            l = [represent(v) for v in value]
-                        elif value is None:
-                            l = ["-"]
-                        else:
-                            if type(value) in (int, float):
-                                l = IS_NUMBER.represent(value)
-                            else:
-                                l = unicode(value)
-                        #add_value(", ".join(l))
-                        add_value(UL([LI(v) for v in l]))
-                    else:
-                        if type(value) in (int, float):
-                            add_value(IS_NUMBER.represent(value))
-                        else:
-                            add_value(unicode(value))
-
-                    layer_ids = []
-                    layer_values = cell_lookup_table.get(layer_idx, {})
-
-                    if m == "count":
-                        rfield = rfields[f]
-                        field = rfield.field
-                        colname = rfield.colname
-                        has_fk = field is not None and s3_has_foreign_key(field)
-                        for id in cell.records:
-
-                            record = self.records[id]
-                            try:
-                                fvalue = record[colname]
-                            except AttributeError:
-                                fvalue = None
-
-                            if fvalue is not None:
-                                if has_fk:
-                                    if type(fvalue) is not list:
-                                        fvalue = [fvalue]
-                                    # list of foreign keys
-                                    for fk in fvalue:
-                                        if fk is not None and fk not in layer_ids:
-                                            layer_ids.append(int(fk))
-                                            if fk not in layer_values:
-                                                layer_values[fk] = s3_unicode(field.represent(fk))
-                                else:
-                                    if type(fvalue) is not list:
-                                        fvalue = [fvalue]
-                                    for val in fvalue:
-                                        if val is not None:
-                                            if val not in cell_vals:
-                                                next_id = len(cell_vals)
-                                                cell_vals[val] = next_id
-                                                layer_ids.append(next_id)
-                                                layer_values[next_id] = s3_unicode(represent(val))
-                                            else:
-                                                prev_id = cell_vals[val]
-                                                if prev_id not in layer_ids:
-                                                    layer_ids.append(prev_id)
-                                                    
-                        layer_ids.sort(key=lambda i: layer_values[i])
-
-                    cell_ids.append(layer_ids)
-                    cell_lookup_table[layer_idx] = layer_values
-
-                vals = [DIV(v, _class="report-cell-value") for v in vals]
-                if any(cell_ids):
-                    cell_attr = {"_data-records": cell_ids}
-                    vals.append(DIV(_class="report-cell-zoom"))
-                else:
-                    cell_attr = {}
-                add_cell(TD(vals, **cell_attr))
-
-            # Row total
-            totals = get_total(row, layers, append=add_row_total)
-            if show_totals and cols is not None:
-                add_cell(TD(totals))
-
-            add_row(tr)
-
-        # Table footer:
-
-        i = numrows
-        _class = i % 2 and "odd" or "even"
-        _class = "%s %s" % (_class, "totals_row")
-        col_total = TR(_class=_class)
-        add_total = col_total.append
-        add_total(TH(TOTAL, _class="totals_header", _scope="row"))
-
-        # Column totals
-        for j in xrange(numcols):
-            cell_idx = cols_list[j][1]
-            col = self.col[cell_idx]
-            totals = get_total(col, layers, append=add_col_total)
-            add_total(TD(IS_NUMBER.represent(totals)))
-
-        # Grand total
-        if cols is not None:
-            grand_totals = get_total(self.totals, layers)
-            add_total(TD(grand_totals))
-        tfoot = TFOOT(col_total)
-
-        # Wrap up:
-
-        append = components.append
-        append(thead)
-        append(tbody)
-        if show_totals:
-            append(tfoot)
-
-        # Chart data:
-
-        layer_label = s3_unicode(layer_label)
-        BY = T("by")
-        row_label = "%s %s" % (BY, s3_unicode(row_label))
-        if col_label:
-            col_label = "%s %s" % (BY, s3_unicode(col_label))
-        if filter_query and hasattr(filter_query, "serialize_url"):
-            filter_vars = filter_query.serialize_url(resource=self.resource)
-        else:
-            filter_vars = {}
-        hide_opts = current.deployment_settings.get_ui_hide_report_options()
-        json_data = json.dumps(dict(t=layer_label,
-                                    x=col_label,
-                                    y=row_label,
-                                    r=self.rows,
-                                    c=self.cols,
-                                    d=self.compact(n=50, represent=True),
-                                    u=url,
-                                    f=filter_vars,
-                                    h=hide_opts,
-                                    cell_lookup_table=cell_lookup_table))
-        self.report_data = Storage(row_label=row_label,
-                                   col_label=col_label,
-                                   layer_label=layer_label,
-                                   json_data=json_data)
-
-        return TABLE(components, **attributes)
-
-    # -------------------------------------------------------------------------
-    def compact(self, n=50, layer=None, least=False, represent=False):
+    # ---------------------------------------------------------------------
+    def render_column(self, item_id, rfield, record):
         """
-            Get the top/least n numeric results for a layer, used to
-            generate the input data for charts.
+            Render a data column.
 
-            @param n: maximum dimension size, extracts the n-1 top/least
-                      rows/cols and aggregates the rest under "__other__"
-            @param layer: the layer
-            @param least: use the least n instead of the top n results
-            @param represent: represent the row/col dimension values as
-                              strings using the respective field
-                              representation
+            @param item_id: the HTML element ID of the item
+            @param rfield: the S3ResourceField for the column
+            @param record: the record (from S3Resource.select)
         """
 
-        default = {"rows": [], "cols": [], "cells": []}
-
-        if self.empty or layer and layer not in self.layers:
-            return default
-        elif not layer:
-            layer = self.layers[0]
-
-        method = layer[-1]
-        if method == "min":
-            least = not least
-        numeric = lambda x: isinstance(x, (int, long, float))
-
-        rfields = self.rfields
-        OTHER = "__other__"
-
-        def top(tl, length=10, least=False):
-            """ Find the top/least n rows/cols """
-            try:
-                if len(tl) > length:
-                    m = length - 1
-                    l = list(tl)
-                    l.sort(lambda x, y: int(y[1]-x[1]))
-                    if least:
-                        l.reverse()
-                    ts = (OTHER, self._aggregate([t[1] for t in l[m:]], method))
-                    l = l[:m] + [ts]
-                    return l
-            except (TypeError, ValueError):
-                pass
-            return tl
-
-        def sortdim(dim, items):
-            """ Sort a dimension """
-
-            rfield = rfields[dim]
-            if not rfield:
-                return
-            ftype = rfield.ftype
-            sortby = "value"
-            if ftype == "integer":
-                requires = rfield.requires
-                if isinstance(requires, (tuple, list)):
-                    requires = requires[0]
-                if isinstance(requires, IS_EMPTY_OR):
-                    requires = requires.other
-                if isinstance(requires, IS_IN_SET):
-                    sortby = "text"
-            elif ftype[:9] == "reference":
-                sortby = "text"
-            items.sort(key=lambda item: item[2][sortby])
-
-        if represent:
-            row_repr = self._represent_method(self.rows)
-            col_repr = self._represent_method(self.cols)
-        else:
-            row_repr = col_repr = lambda v: s3_unicode(v)
-
-        others = s3_unicode(current.T("Others"))
-
-        irows = self.row
-        icols = self.col
-        rows = []
-        cols = []
-
-        # Group and sort the rows
-        is_numeric = None
-        for i in xrange(self.numrows):
-            r = irows[i]
-            total = r[layer]
-            if is_numeric is None:
-                is_numeric = numeric(total)
-            if not is_numeric:
-                total = len(r["records"])
-            header = Storage(value = r.value,
-                             text = r.text
-                                    if "text" in r else row_repr(r.value))
-            rows.append((i, total, header))
-        rows = top(rows, n, least=least)
-        last = rows.pop(-1) if rows[-1][0] == OTHER else None
-        sortdim(self.rows, rows)
-        if last:
-            last = (last[0], last[1], Storage(value=None, text=others))
-            rows.append(last)
-        row_indices = [i[0] for i in rows]
-
-        # Group and sort the cols
-        is_numeric = None
-        for i in xrange(self.numcols):
-            c = icols[i]
-            total = c[layer]
-            if is_numeric is None:
-                is_numeric = numeric(total)
-            if not is_numeric:
-                total = len(c["records"])
-            header = Storage(value = c.value,
-                             text = c.text
-                                    if "text" in c else col_repr(c.value))
-            cols.append((i, total, header))
-        cols = top(cols, n, least=least)
-        last = cols.pop(-1) if cols[-1][0] == OTHER else None
-        sortdim(self.cols, cols)
-        if last:
-            last = (last[0], last[1], Storage(value=None, text=others))
-            cols.append(last)
-        col_indices = [i[0] for i in cols]
-
-        # Group and sort the cells
-        icell = self.cell
-        cells = {}
-        for i in xrange(self.numrows):
-            irow = icell[i]
-            ridx = i if i in row_indices else OTHER
-            if ridx not in cells:
-                orow = cells[ridx] = {}
-            else:
-                orow = cells[ridx]
-            for j in xrange(self.numcols):
-                cell = irow[j]
-                cidx = j if j in col_indices else OTHER
-                value = cell[layer] if is_numeric else len(cell["records"])
-                if cidx not in orow:
-                    orow[cidx] = [value] if cidx == OTHER or ridx == OTHER else value
-                else:
-                    orow[cidx].append(value)
-
-        # Aggregate the grouped values
-        orows = []
-        ocols = []
-        ocells = []
-        ctotals = True
-        rappend = orows.append
-        cappend = ocols.append
-        for ri, rt, rh in rows:
-            orow = []
-            if represent:
-                rappend((ri, s3_unicode(rh.value), rh.text, rt))
-            else:
-                rappend((ri, s3_unicode(rh.value), rt))
-            for ci, ct, ch in cols:
-                value = cells[ri][ci]
-                if type(value) is list:
-                    value = self._aggregate(value, method)
-                orow.append(value)
-                if ctotals:
-                    if represent:
-                        cappend((ci, s3_unicode(ch.value), ch.text, ct))
-                    else:
-                        cappend((ci, s3_unicode(ch.value), ct))
-            ctotals = False
-            ocells.append(orow)
-
-        return {"rows": orows, "cols": ocols, "cells": ocells}
-
-    # -------------------------------------------------------------------------
-    # Internal methods
-    # -------------------------------------------------------------------------
-    def _pivot(self, items, pkey_colname, rows_colname, cols_colname):
-        """
-            2-dimensional pivoting of a list of unique items
-
-            @param items: list of unique items as dicts
-            @param pkey_colname: column name of the primary key
-            @param rows_colname: column name of the row dimension
-            @param cols_colname: column name of the column dimension
-
-            @return: tuple of (cell matrix, row headers, column headers),
-                     where cell matrix is a 2-dimensional array [rows[columns]]
-                     and row headers and column headers each are lists (in the
-                     same order as the cell matrix)
-        """
-
-        rvalues = Storage()
-        cvalues = Storage()
-        cells = Storage()
-
-        # All unique rows values
-        rindex = 0
-        cindex = 0
-        for item in items:
-
-            rvalue = item[rows_colname] if rows_colname else None
-            cvalue = item[cols_colname] if cols_colname else None
-
-            if rvalue not in rvalues:
-                r = rvalues[rvalue] = rindex
-                rindex += 1
-            else:
-                r = rvalues[rvalue]
-            if cvalue not in cvalues:
-                c = cvalues[cvalue] = cindex
-                cindex += 1
-            else:
-                c = cvalues[cvalue]
-
-            if (r, c) not in cells:
-                cells[(r, c)] = [item[pkey_colname]]
-            else:
-                cells[(r, c)].append(item[pkey_colname])
-
-        matrix = []
-        for r in xrange(len(rvalues)):
-            row = []
-            for c in xrange(len(cvalues)):
-                row.append(cells[(r, c)])
-            matrix.append(row)
-
-        rnames = [None] * len(rvalues)
-        for k, v in rvalues.items():
-            rnames[v] = k
-
-        cnames = [None] * len(cvalues)
-        for k, v in cvalues.items():
-            cnames[v] = k
-
-        return matrix, rnames, cnames
-
-    # -------------------------------------------------------------------------
-    def _add_layer(self, matrix, fact, method):
-        """
-            Compute an aggregation layer, updates:
-
-                - self.cell: the aggregated values per cell
-                - self.row: the totals per row
-                - self.col: the totals per column
-                - self.totals: the overall totals per layer
-
-            @param matrix: the cell matrix
-            @param fact: the fact field
-            @param method: the aggregation method
-        """
-
-        if method not in self.METHODS:
-            raise SyntaxError("Unsupported aggregation method: %s" % method)
-
-        items = self.records
-        rfields = self.rfields
-        rows = self.row
-        cols = self.col
-        records = self.records
-        extract = self._extract
-        aggregate = self._aggregate
-        resource = self.resource
-
-        RECORDS = "records"
-        VALUES = "values"
-
-        table = resource.table
-        pkey = table._id.name
-
-        if method is None:
-            method = "list"
-        layer = (fact, method)
-
-        numcols = len(self.col)
-        numrows = len(self.row)
-
-        # Initialize cells
-        if self.cell is None:
-            self.cell = [[Storage()
-                          for i in xrange(numcols)]
-                         for j in xrange(numrows)]
-        cells = self.cell
-
-        all_values = []
-        for r in xrange(numrows):
-
-            # Initialize row header
-            row = rows[r]
-            row[RECORDS] = []
-            row[VALUES] = []
-
-            row_records = row[RECORDS]
-            row_values = row[VALUES]
-
-            for c in xrange(numcols):
-
-                # Initialize column header
-                col = cols[c]
-                if RECORDS not in col:
-                    col[RECORDS] = []
-                col_records = col[RECORDS]
-                if VALUES not in col:
-                    col[VALUES] = []
-                col_values = col[VALUES]
-
-                # Get the records
-                cell = cells[r][c]
-                if RECORDS in cell and cell[RECORDS] is not None:
-                    ids = cell[RECORDS]
-                else:
-                    data = matrix[r][c]
-                    if data:
-                        remove = data.remove
-                        while None in data:
-                            remove(None)
-                        ids = data
-                    else:
-                        ids = []
-                    cell[RECORDS] = ids
-                row_records.extend(ids)
-                col_records.extend(ids)
-
-                # Get the values
-                if fact is None:
-                    fact = pkey
-                    values = ids
-                    row_values = row_records
-                    col_values = row_records
-                    all_values = records.keys()
-                else:
-                    values = []
-                    append = values.append
-                    for i in ids:
-                        value = extract(records[i], fact)
-                        if value is None:
-                            continue
-                        append(value)
-                    values = list(s3_flatlist(values))
-                    if method in ("list", "count"):
-                        values =  list(set(values))
-                    row_values.extend(values)
-                    col_values.extend(values)
-                    all_values.extend(values)
-
-                # Aggregate values
-                value = aggregate(values, method)
-                cell[layer] = value
-
-            # Compute row total
-            row[layer] = aggregate(row_values, method)
-            del row[VALUES]
-
-        # Compute column total
-        for c in xrange(numcols):
-            col = cols[c]
-            col[layer] = aggregate(col[VALUES], method)
-            del col[VALUES]
-
-        # Compute overall total
-        self.totals[layer] = aggregate(all_values, method)
-        return
-
-    # -------------------------------------------------------------------------
-    @staticmethod
-    def _aggregate(values, method):
-        """
-            Compute an aggregation of a list of atomic values
-
-            @param values: the values as list
-            @param method: the aggregation method
-        """
-
-        if values is None:
+        colname = rfield.colname
+        if colname not in record:
             return None
 
-        if method is None or method == "list":
-            if values:
-                return values
-            else:
-                return None
+        value = record[colname]
+        value_id = "%s-%s" % (item_id, rfield.colname.replace(".", "_"))
 
-        elif method == "count":
-            return len([v for v in values if v is not None])
+        label = LABEL("%s:" % rfield.label,
+                      _for = value_id,
+                      _class = "dl-field-label")
 
-        elif method == "min":
-            try:
-                return min(values)
-            except (TypeError, ValueError):
-                return None
+        value = SPAN(value,
+                     _id = value_id,
+                     _class = "dl-field-value")
 
-        elif method == "max":
-            try:
-                return max(values)
-            except (TypeError, ValueError):
-                return None
-
-        elif method == "sum":
-            try:
-                return sum(values)
-            except (TypeError, ValueError):
-                return None
-
-        elif method in ("avg"):
-            try:
-                if len(values):
-                    return sum(values) / float(len(values))
-                else:
-                    return 0.0
-            except (TypeError, ValueError):
-                return None
-
-        #elif method == "std":
-            #import numpy
-            #if not values:
-                #return 0.0
-            #try:
-                #return numpy.std(values)
-            #except (TypeError, ValueError):
-                #return None
-
-        else:
-            return None
-
-    # -------------------------------------------------------------------------
-    def _get_fields(self, fields=None):
-        """
-            Determine the fields needed to generate the report
-
-            @param fields: fields to include in the report (all fields)
-        """
-
-        resource = self.resource
-        table = resource.table
-
-        # Lambda to prefix all field selectors
-        alias = resource.alias
-        def prefix(s):
-            if isinstance(s, (tuple, list)):
-                return prefix(s[-1])
-            if "." not in s.split("$", 1)[0]:
-                return "%s.%s" % (alias, s)
-            elif s[:2] == "~.":
-                return "%s.%s" % (alias, s[2:])
-            else:
-                return s
-
-        self.pkey = pkey = prefix(table._id.name)
-        self.rows = rows = self.rows and prefix(self.rows) or None
-        self.cols = cols = self.cols and prefix(self.cols) or None
-
-        if not fields:
-            fields = []
-
-        # dfields (data-fields): fields to generate the layers
-        dfields = [prefix(s) for s in fields]
-        if rows and rows not in dfields:
-            dfields.append(rows)
-        if cols and cols not in dfields:
-            dfields.append(cols)
-        if pkey not in dfields:
-            dfields.append(pkey)
-        for i in xrange(len(self.layers)):
-            f, m = self.layers[i]
-            s = prefix(f)
-            self.layers[i] = (s, m)
-            if s not in dfields:
-                dfields.append(f)
-        self.dfields = dfields
-
-        # rfields (resource-fields): dfields resolved into a ResourceFields map
-        rfields, joins, left, distinct = resource.resolve_selectors(dfields)
-        rfields = Storage([(f.selector.replace("~", alias), f) for f in rfields])
-        self.rfields = rfields
-
-        # gfields (grouping-fields): fields to group the records by
-        self.gfields = {pkey: rfields[pkey].colname,
-                        rows: rfields[rows].colname if rows else None,
-                        cols: rfields[cols].colname if cols else None}
-        return
-
-    # -------------------------------------------------------------------------
-    def _represent_method(self, field):
-        """
-            Get the representation method for a field in the report
-
-            @param field: the field selector
-        """
-
-        rfields = self.rfields
-        default = lambda value: None
-
-        if field and field in rfields:
-
-            rfield = rfields[field]
-
-            if rfield.field:
-                def repr_method(value):
-                    return current.manager.represent(rfield.field, value,
-                                                     strip_markup=True)
-
-            elif rfield.virtual:
-                stripper = S3MarkupStripper()
-                def repr_method(val):
-                    if val is None:
-                        return "-"
-                    text = s3_unicode(val)
-                    if "<" in text:
-                        stipper.feed(text)
-                        return stripper.stripped() # = totally naked ;)
-                    else:
-                        return text
-            else:
-                repr_method = default
-        else:
-            repr_method = default
-
-        return repr_method
-
-    # -------------------------------------------------------------------------
-    @staticmethod
-    def _totals(values, layers, append=None):
-        """
-            Get the totals of a row/column/report
-
-            @param values: the values dictionary
-            @param layers: the layers
-            @param append: callback to collect the totals for JSON data
-                           (currently only collects the first layer)
-        """
-
-        totals = []
-        for layer in layers:
-            f, m = layer
-            value = values[layer]
-
-            if m == "list":
-                value = value and len(value) or 0
-            if not len(totals) and append is not None:
-                append(value)
-            totals.append(IS_NUMBER.represent(value))
-        totals = " / ".join(totals)
-        return totals
-
-    # -------------------------------------------------------------------------
-    def _extract(self, row, field):
-        """
-            Extract a field value from a DAL row
-
-            @param row: the row
-            @param field: the fieldname (list_fields syntax)
-        """
-
-        rfields = self.rfields
-        if field not in rfields:
-            raise KeyError("Invalid field name: %s" % field)
-        rfield = rfields[field]
-        try:
-            return rfield.extract(row)
-        except AttributeError:
-            return None
-
-    # -------------------------------------------------------------------------
-    def _expand(self, row): #, field=None):
-        """
-            Expand a data frame row into a list of rows for list:type values
-
-            @param row: the row
-            @param field: the field to expand (None for all fields)
-        """
-
-        item = [(colname, row[colname])
-                for selector, colname in self.gfields.items() if colname]
-
-        pairs = []
-        append = pairs.append
-        for colname, value in item:
-            if type(value) is list:
-                append([(colname, v) for v in value])
-            else:
-                append([(colname, value)])
-        return [dict(i) for i in product(*pairs)]
-
-    # -------------------------------------------------------------------------
-    @staticmethod
-    def _get_field_label(rfields, field, tablename, key):
-        """
-            Get the label for a field
-
-            @param rfields: the list fields map
-            @param key: the configuration key
-        """
-
-        DEFAULT = ""
-
-        if field in rfields:
-            rfield = rfields[field]
-        else:
-            return DEFAULT
-
-        # @todo: cleanup this:
-        get_config = lambda key, default, tablename=tablename: \
-                     current.s3db.get_config(tablename, key, default)
-        list_fields = get_config("list_fields", None)
-        fields = get_config(key, list_fields)
-
-        if fields:
-            for f in fields:
-                if isinstance(f, (tuple, list)) and f[1] == rfield.selector:
-                    return f[0]
-
-        if rfield:
-            if rfield.ftype == "id":
-                return current.T("Records")
-            return rfield.label
-        else:
-            return DEFAULT
-
-    # -------------------------------------------------------------------------
-    @classmethod
-    def _get_method_label(cls, code):
-        """
-            Get a label for a method
-
-            @param code: the method code
-            @return: the label (lazyT), or None for unsupported methods
-        """
-
-        methods = cls.METHODS
-
-        if code is None:
-            code = "list"
-        if code in methods:
-            return current.T(methods[code])
-        else:
-            return None
+        return TAG[""](label, value)
 
 # END =========================================================================

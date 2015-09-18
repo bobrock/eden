@@ -4,12 +4,13 @@
 /compiled/*
 /databases/*
 /errors/*
+/indices/*
 /models/000_config.py
 /models/0000_update_check.py
 /sessions/*
 /uploads/*
 /static/cache/*
-/static/fonts/*.ttf
+/static/fonts/unifont.ttf
 /static/scripts/tools/compiler.jar
 /tests/unit/*.pdf
 .DS_Store
@@ -19,3 +20,7 @@
 *.pyc
 *.~*~
 .directory
+.pythonhistory
+.idea
+.sass-cache
+/yaml/*

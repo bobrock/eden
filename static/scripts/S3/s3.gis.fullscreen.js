@@ -1,5 +1,5 @@
 // Module pattern to hide internal vars
-(function () {
+(function() {
     // Module scope
     var map;
 
@@ -9,9 +9,10 @@
 
     function enable_fullscreen(map) {
         // Remove map elements
-        map.s3.mapWestPanelContainer.removeAll(false);
-        map.s3.mapPanelContainer.removeAll(false);
-        var mapWin = map.s3.mapWin;
+        var s3 = map.s3;
+        s3.westPanelContainer.removeAll(false);
+        s3.mapPanelContainer.removeAll(false);
+        var mapWin = s3.mapWin;
         mapWin.items.items = [];
         mapWin.doLayout();
         mapWin.destroy();
@@ -25,23 +26,30 @@
         } else if (document.body.mozRequestFullScreen) {
             document.body.mozRequestFullScreen();
         }
+        // Modify the CSS for the Legend Panel & Save Panel
+        var map_id = s3.id;
+        $('#' + map_id).addClass('fullscreen');
     }
 
     function disable_fullscreen(map) {
         // Remove map elements
-        map.s3.mapWestPanelContainer.removeAll(false);
-        map.s3.mapPanelContainer.removeAll(false);
-        var mapWin = map.s3.mapWin;
+        var s3 = map.s3;
+        s3.westPanelContainer.removeAll(false);
+        s3.mapPanelContainer.removeAll(false);
+        var mapWin = s3.mapWin;
         mapWin.items.items = [];
         mapWin.doLayout();
         mapWin.destroy();
         // Add embedded Panel
         S3.gis.addMapPanel(map);
+        // Modify the CSS for the Legend Panel & Save Panel
+        var map_id = s3.id;
+        $('#' + map_id).removeClass('fullscreen');
     }
 
     $('.gis_fullscreen_map-btn').click(function(evt) {
         if (navigator.appVersion.indexOf('MSIE') != -1) {
-            // Not supported on IE
+            // Not supported on IE => do full-page reload instead
             return;
         } else {
             // Read map_id from the Button to determine which Map to make fullscreen
@@ -54,7 +62,7 @@
                 }
             }
             if (undefined == map_id) {
-                map_id = 'default';
+                map_id = 'default_map';
             }
             map = S3.gis.maps[map_id];
             enable_fullscreen(map);

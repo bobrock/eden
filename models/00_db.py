@@ -10,15 +10,10 @@ if settings.get_L10n_languages_readonly():
     # Make the Language files read-only for improved performance
     T.is_writable = False
 
-# Are we running in debug mode?
-s3.debug = request.vars.get("debug", None) or \
-                    settings.get_base_debug()
+get_vars = request.get_vars
 
-if s3.debug:
-    # Reload all modules every request
-    # Doesn't catch s3cfg or s3/*
-    from gluon.custom_import import track_changes
-    track_changes(True)
+# Are we running in debug mode?
+settings.check_debug()
 
 import datetime
 
@@ -38,16 +33,17 @@ migrate = settings.get_base_migrate()
 fake_migrate = settings.get_base_fake_migrate()
 
 if migrate:
-    check_reserved = ["mysql", "postgres"]
+    check_reserved = ("mysql", "postgres")
 else:
-    check_reserved = None
+    check_reserved = []
 
 (db_string, pool_size) = settings.get_database_string()
 if db_string.find("sqlite") != -1:
     db = DAL(db_string,
              check_reserved=check_reserved,
              migrate_enabled = migrate,
-             fake_migrate_all = fake_migrate)
+             fake_migrate_all = fake_migrate,
+             lazy_tables = not migrate)
     # on SQLite 3.6.19+ this enables foreign key support (included in Python 2.7+)
     # db.executesql("PRAGMA foreign_keys=ON")
 else:
@@ -64,14 +60,20 @@ else:
             #    pass
             if check_reserved:
                 check_reserved = ["postgres"]
-            db = DAL(db_string, check_reserved=check_reserved,
-                     pool_size=pool_size, migrate_enabled = migrate)
+            db = DAL(db_string,
+                     check_reserved = check_reserved,
+                     pool_size = pool_size,
+                     migrate_enabled = migrate,
+                     lazy_tables = not migrate)
         else:
             # PostgreSQL
             if check_reserved:
                 check_reserved = ["mysql"]
-            db = DAL(db_string, check_reserved=check_reserved,
-                     pool_size=pool_size, migrate_enabled = migrate)
+            db = DAL(db_string,
+                     check_reserved = check_reserved,
+                     pool_size = pool_size,
+                     migrate_enabled = migrate,
+                     lazy_tables = not migrate)
     except:
         db_type = db_string.split(":", 1)[0]
         db_location = db_string.split("@", 1)[1]
@@ -102,6 +104,9 @@ from gluon.storage import Messages
 messages = Messages(T)
 current.messages = messages
 
+ERROR = Messages(T)
+current.ERROR = ERROR
+
 # Import the S3 Framework
 if update_check_needed:
     # Reload the Field definitions
@@ -109,31 +114,36 @@ if update_check_needed:
 else:
     import s3 as s3base
 
+# Set up logger (before any module attempts to use it!)
+import s3log
+s3log.S3Log.setup()
+
+# AAA
+current.auth = auth = s3base.AuthS3()
+
 # Use session for persistent per-user variables
 # - beware of a user having multiple tabs open!
 # - don't save callables or class instances as these can't be pickled
 if not session.s3:
     session.s3 = Storage()
 
-# AAA
-auth = s3base.AuthS3()
-current.auth = auth
-
-s3_audit = s3base.S3Audit(migrate=migrate, fake_migrate=fake_migrate)
-current.s3_audit = s3_audit
-
 # Use username instead of email address for logins
 # - would probably require further customisation
-#   to get this working within Eden
-#auth.settings.username_field = True
+#   to get this fully-working within Eden as it's not a Tested configuration
+#auth.settings.login_userfield = "username"
 
 auth.settings.hmac_key = settings.get_auth_hmac_key()
 auth.define_tables(migrate=migrate, fake_migrate=fake_migrate)
+
+current.audit = audit = s3base.S3Audit(migrate=migrate, fake_migrate=fake_migrate)
 
 # Shortcuts for models/controllers/views
 s3_has_role = auth.s3_has_role
 s3_has_permission = auth.s3_has_permission
 s3_logged_in_person = auth.s3_logged_in_person
+
+# Calendar
+current.calendar = s3base.S3Calendar()
 
 # CRUD
 s3.crud = Storage()
@@ -142,6 +152,7 @@ s3.crud = Storage()
 # namespace in order to access them without the s3base namespace prefix
 s3_action_buttons = s3base.S3CRUD.action_buttons
 s3_fullname = s3base.s3_fullname
+s3_redirect_default = s3base.s3_redirect_default
 S3ResourceHeader = s3base.S3ResourceHeader
 from s3.s3navigation import s3_rheader_tabs
 from s3.s3validators import *
@@ -152,10 +163,11 @@ from s3.s3data import *
 gis = s3base.GIS()
 current.gis = gis
 
-# S3RequestManager
-s3mgr = s3base.S3RequestManager()
-current.manager = s3mgr
+# s3_request
 s3_request = s3base.s3_request
+
+# Field Selectors
+FS = s3base.FS
 
 # S3XML
 s3xml = s3base.S3XML()
@@ -172,8 +184,8 @@ current.sync = sync
 # -----------------------------------------------------------------------------
 def s3_clear_session():
 
-    # S3ResourceManager last seen records (rcvars)
-    s3mgr.clear_session()
+    # CRUD last opened records (rcvars)
+    s3base.s3_remove_last_record_id()
 
     # Session-owned records
     if "owned_records" in session:

@@ -21,7 +21,7 @@ def s3_menu_postp():
         newreq = dict()
     selreq = {"req.hospital_id__ne":"NONE"}
     menu_selected = []
-    hospital_id = s3mgr.get_session("hms", "hospital")
+    hospital_id = s3base.s3_get_last_record_id("hms_hospital")
     if hospital_id:
         hospital = s3db.hms_hospital
         query = (hospital.id == hospital_id)
@@ -50,50 +50,16 @@ def index_alt():
     """
 
     # Just redirect to the Hospitals Map
-    redirect(URL(f="hospital", args=["map"]))
+    s3_redirect_default(URL(f="hospital", args=["map"]))
 
 # -----------------------------------------------------------------------------
 def ltc():
-    """ Filtered REST Controller """
+    """
+        Filtered REST Controller for Sandy
+    """
 
     s3.filter = (s3db.hms_hospital.facility_type == 31)
     return hospital()
-
-# -----------------------------------------------------------------------------
-def marker_fn(record):
-    """
-        Function to decide which Marker to use for Hospital Map
-        @ToDo: Legend
-        @ToDo: Move to Templates
-        @ToDo: Use Symbology
-    """
-
-    stable = db.hms_status
-    status = db(stable.hospital_id == record.id).select(stable.facility_status,
-                                                        limitby=(0, 1)
-                                                        ).first()
-    if record.facility_type == 31:
-        marker = "special_needs"
-    else:
-        marker = "hospital"
-    if status:
-        if status.facility_status == 1:
-            # Normal
-            marker = "%s_green" % marker
-        elif status.facility_status in (3, 4):
-            # Evacuating or Closed
-            marker = "%s_red" % marker
-        elif status.facility_status == 2:
-            # Compromised
-            marker = "%s_yellow" % marker
-
-    mtable = db.gis_marker
-    marker = db(mtable.name == marker).select(mtable.image,
-                                              mtable.height,
-                                              mtable.width,
-                                              cache=s3db.cache,
-                                              limitby=(0, 1)).first()
-    return marker
 
 # -----------------------------------------------------------------------------
 def hospital():
@@ -122,14 +88,7 @@ def hospital():
                     s3db.inv_prep(r)
 
                 elif r.component.name == "human_resource":
-                    # Filter out people which are already staff for this hospital
-                    s3base.s3_filter_staff(r)
-                    # Make it clear that this is for adding new staff, not assigning existing
-                    s3.crud_strings.hrm_human_resource.label_create_button = T("Add New Staff Member")
-                    # Cascade the organisation_id from the hospital to the staff
-                    field = s3db.hrm_human_resource.organisation_id
-                    field.default = r.record.organisation_id
-                    field.writable = False
+                    s3db.org_site_staff_config(r)
 
                 elif r.component.name == "req":
                     if r.method != "update" and r.method != "read":
@@ -269,10 +228,6 @@ def hospital():
                 if r.id:
                     table.obsolete.readable = table.obsolete.writable = True
 
-                elif r.method == "map":
-                    # Tell the client to request per-feature markers
-                    s3db.configure("hms_hospital", marker_fn=marker_fn)
-
                 s3.formats["have"] = r.url() # .have added by JS
                 # Add comments
                 table.gov_uuid.comment = DIV(_class="tooltip",
@@ -295,24 +250,22 @@ def hospital():
             # Duplicates info in the other fields
             r.table.location_id.readable = False
 
-        elif r.representation == "geojson":
-            # Load these models now as they'll be needed when we encode
-            mtable = s3db.gis_marker
-            stable = s3db.hms_status
-            s3db.configure("hms_hospital", marker_fn=marker_fn)
-
         return True
     s3.prep = prep
 
-    output = s3_rest_controller("hms", "hospital",
-                                rheader=s3db.hms_hospital_rheader)
+    output = s3_rest_controller(rheader=s3db.hms_hospital_rheader)
     return output
 
 # -----------------------------------------------------------------------------
 def incoming():
-    """ Incoming Shipments """
+    """
+        Incoming Shipments for Sites
 
-    return inv_incoming()
+        Used from Requests rheader when looking at Transport Status
+    """
+
+    # @ToDo: Create this function!
+    return s3db.inv_incoming()
 
 # -----------------------------------------------------------------------------
 def req_match():

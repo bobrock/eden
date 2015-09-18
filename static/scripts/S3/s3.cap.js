@@ -42,46 +42,51 @@
 
     // Logic for forms
     function init_cap_form($form) {
+        // Initialization of the cap_form
+        var restriction_row = $('#cap_alert_restriction__row, #cap_alert_restriction__row1');
+        var recipient_row = $('#cap_alert_addresses__row, #cap_alert_addresses__row1');
+        // Show the restriction field if scope is restricted otherwise hide by default
+        if ($('#cap_alert_scope').val() == 'Restricted') {
+        	restriction_row.show();
+        } else {
+        	restriction_row.hide();
+        }
         // On change in scope
-        $form.find('[name=scope]').change(function() {
-            var scope = $(this).val(),
-                $restriction = $form.find('[name=restriction]'),
-                $recipients  = $form.find('[name=addresses]'),
-
-                disable = function (item) {
-                            item.parents('tr').eq(0).hide().prev().hide();
-                          }, // @ToDo: hide or disable?
-                enable  = function (item) {
-                            item.parents('tr').eq(0).show().prev().show();
-                          };
-
+        $('#cap_alert_scope').change(function() {
+            var scope = $(this).val();
             switch(scope) {
                 case 'Public':
-                    disable($restriction);
-                    disable($recipients);
+                    restriction_row.hide();
+                	if ($('#cap_alert_restriction').val()) {
+                		$('#cap_alert_restriction').val('');
+                	}
+                    recipient_row.show();
                     break;
                 case 'Restricted':
-                    enable($restriction);
-                    disable($recipients);
+                    restriction_row.show();
+                    recipient_row.hide();
                     break;
                 case 'Private':
-                    disable($restriction);
-                    enable($recipients);
+                    restriction_row.hide();
+                	if ($('#cap_alert_restriction').val()) {
+                		$('#cap_alert_restriction').val('');	
+                	}
+                    recipient_row.show();
                     break;
             }
         });
 
-        $form.find('[name=priority]').change(function() {
+        $('#cap_info_priority').change(function() {
             var p = S3.cap_priorities,
                 len = p.length;
-            if ($(this).val() == 'Undefined') {
+            if ($(this).find('option:selected').text() == 'Undefined') {
                 $(this).css('border', '2px solid gray');
                 $form.find('[name=urgency]').val('');
                 $form.find('[name=severity]').val('');
                 $form.find('[name=certainty]').val('');
             }
             for (var i=0; i< len; i++) {
-                if (p[i][0] == $(this).val()) {
+                if (p[i][0] == $(this).find('option:selected').text()) {
                     $form.find('[name=urgency]').val(p[i][1]);
                     $form.find('[name=severity]').val(p[i][2]);
                     $form.find('[name=certainty]').val(p[i][3]);
@@ -97,10 +102,14 @@
                 if ($form.find('[name=urgency]').val()   == p[i][1] &&
                     $form.find('[name=severity]').val()  == p[i][2] &&
                     $form.find('[name=certainty]').val() == p[i][3]) {
-                    $form.find('[name=priority]').val(p[i][0])
-                         .css('border', '2px solid ' + p[i][4]);
+                        $('#cap_info_priority option').each(function() {
+                            if($(this).text() == p[i][0]) {
+                                $(this).attr('selected', 'selected');
+                                $form.find('[name=priority]').css('border', '2px solid ' + p[i][4]);
+                            }                        
+                        });
                     return;
-                }
+                    }
             }
 
             $form.find('[name=priority]').val('Undefined')
@@ -135,6 +144,12 @@
 
                     switch(typeof(values[f])) {
                     case 'string':
+                    	if (f == 'restriction') {
+                    		$f.val(values[f] || '');
+                    		if ($f.val() != '') {
+                    			restriction_row.show();
+                    		}
+                    	}
                     case 'undefined':
                         // change field only if locked or overwrite flag is set
                         if ($f.is(':text') || $f.is('textarea') || $f.is('select')) {
@@ -153,7 +168,22 @@
                         }
                         break;
                     case 'object':
-                        break;
+                    	var prop = ['scope', 'addresses', 'codes'];
+                    	for (var i = 0; i < prop.length; i++) {
+                    		if (f == prop[i]) {
+                    			$f.val(values[f]['@value'] || '');
+                    		}
+                    	}
+
+                        if (f == 'incidents') {
+                            if (overwrite || locked) {
+                                $f.val(values[f]['@value'] || '');
+                                //refresh multiselect wizard for display
+                                $('select#cap_alert_incidents').multiselect('refresh');
+                            }                                                
+                        } else {
+                            break;
+                        }
                     }
                 } catch(e) {
                     s3_debug('ERROR', e);

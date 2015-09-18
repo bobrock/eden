@@ -4,7 +4,7 @@
     xmlns:org="http://eden.sahanafoundation.org/org">
 
     <!-- **********************************************************************
-         Resource - CSV Import Stylesheet
+         Org Resource - CSV Import Stylesheet
 
          CSV fields:
          Organisation............org_organisation
@@ -15,7 +15,7 @@
          L3......................gis_location.L3
          L4......................gis_location.L4
          Resource Type...........org_resource_type.name
-         Quantity................quantity
+         Quantity................value
          Comments................comments
 
     *********************************************************************** -->
@@ -25,8 +25,8 @@
     <xsl:include href="../../xml/countries.xsl"/>
 
     <!-- Indexes for faster processing -->
-    <xsl:key name="resource_type" match="row" use="col[@field='Resource Type']"/>
     <xsl:key name="organisation" match="row" use="col[@field='Organisation']"/>
+    <xsl:key name="resource_type" match="row" use="col[@field='Resource Type']"/>
 
     <!-- ****************************************************************** -->
     <xsl:template match="/">
@@ -71,14 +71,6 @@
         <xsl:variable name="BranchName" select="col[@field='Branch']/text()"/>
 
         <resource name="org_resource">
-            <xsl:attribute name="tuid">
-                <xsl:value-of select="concat($OrgName,$BranchName,col[@field='Country']/text(),
-                                                                  col[@field='L1']/text(),
-                                                                  col[@field='L2']/text(),
-                                                                  col[@field='L3']/text(),
-                                                                  col[@field='L4']/text(),
-                                                                  col[@field='Resource Type'])"/>
-            </xsl:attribute>
             <!-- Link to Organisation -->
             <reference field="organisation_id" resource="org_organisation">
                 <xsl:attribute name="tuid">
@@ -97,7 +89,7 @@
             <xsl:call-template name="LocationReference"/>
 
             <xsl:if test="col[@field='Resource Type']!=''">
-                <reference field="resource_type_id" resource="org_resource_type">
+                <reference field="parameter_id" resource="org_resource_type">
                     <xsl:attribute name="tuid">
                         <xsl:value-of select="concat('ResourceType:', col[@field='Resource Type'])"/>
                     </xsl:attribute>
@@ -105,7 +97,7 @@
             </xsl:if>
 
             <!-- Resource data -->
-            <data field="quantity"><xsl:value-of select="col[@field='Quantity']"/></data>
+            <data field="value"><xsl:value-of select="col[@field='Quantity']"/></data>
             <data field="comments"><xsl:value-of select="col[@field='Comments']"/></data>
         </resource>
 

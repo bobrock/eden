@@ -5,7 +5,7 @@
     <!-- **********************************************************************
          S3CSV Common Templates
 
-         Copyright (c) 2010-12 Sahana Software Foundation
+         Copyright (c) 2010-14 Sahana Software Foundation
 
          Permission is hereby granted, free of charge, to any person
          obtaining a copy of this software and associated documentation
@@ -29,7 +29,6 @@
          OTHER DEALINGS IN THE SOFTWARE.
 
     *********************************************************************** -->
-
     <!-- Resolve Column header
 
          Helper template to resolve column header variants, using both
@@ -63,7 +62,6 @@
     </xsl:template>
 
     <!-- ****************************************************************** -->
-
     <!-- Get Column Value
 
          Extracts the value of a column in the current <row> and resolves
@@ -146,5 +144,72 @@
     </xsl:template>
 
     <!-- ****************************************************************** -->
+    <!-- listString: split a string with a list into items
+
+         @param list: the string containing the list
+         @param sep: the list separator
+    -->
+    <xsl:template name="listString">
+
+        <xsl:param name="list"/>
+        <xsl:param name="listsep" select="','"/>
+
+        <xsl:if test="$listsep">
+            <xsl:choose>
+                <xsl:when test="contains($list, $listsep)">
+                    <xsl:variable name="head">
+                        <xsl:value-of select="substring-before($list, $listsep)"/>
+                    </xsl:variable>
+                    <xsl:variable name="tail">
+                        <xsl:value-of select="substring-after($list, $listsep)"/>
+                    </xsl:variable>
+                    <xsl:text>"</xsl:text>
+                    <xsl:value-of select="normalize-space($head)"/>
+                    <xsl:text>",</xsl:text>
+                    <xsl:call-template name="listString">
+                        <xsl:with-param name="list" select="$tail"/>
+                        <xsl:with-param name="listsep" select="$listsep"/>
+                    </xsl:call-template>
+                </xsl:when>
+                <xsl:otherwise>
+                    <xsl:if test="normalize-space($list)!=''">
+                        <xsl:text>"</xsl:text>
+                        <xsl:value-of select="normalize-space($list)"/>
+                        <xsl:text>"</xsl:text>
+                    </xsl:if>
+                </xsl:otherwise>
+            </xsl:choose>
+        </xsl:if>
+
+    </xsl:template>
+
+    <!-- ****************************************************************** -->
+    <!-- Convert a string to uppercase
+
+         @param string: the string
+    -->
+
+    <xsl:template name="uppercase">
+
+        <xsl:param name="string"/>
+        <xsl:value-of select="translate($string,
+            'abcdefghijklmnopqrstuvwxyzáéíóúàèìòùäöüåâêîôûãẽĩõũø',
+            'ABCDEFGHIJKLMNOPQRSTUVWXYZÁÉÍÓÚÀÈÌÒÙÄÖÜÅÂÊÎÔÛÃẼĨÕŨØ')"/>
+    </xsl:template>
+
+    <!-- ****************************************************************** -->
+    <!-- Create an organisation entry for the current row -->
+
+    <xsl:template name="Organisation">
+
+        <xsl:variable name="OrgName" select="col[@field='Organisation']/text()"/>
+
+        <resource name="org_organisation">
+            <xsl:attribute name="tuid">
+                <xsl:value-of select="$OrgName"/>
+            </xsl:attribute>
+            <data field="name"><xsl:value-of select="$OrgName"/></data>
+        </resource>
+    </xsl:template>
 
 </xsl:stylesheet>

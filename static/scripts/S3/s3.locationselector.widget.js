@@ -3,16 +3,22 @@
  * This script is in Static to allow caching
  * Dynamic constants (e.g. Internationalised strings) are set in server-generated script
  *
- * @ToDo: Support more than 1/page by not using fixed ids but varying with fieldname (see locationselector.widget2)
+ * @ToDo: Support more than 1/page by not using fixed ids but varying with fieldname
+ *        - see locationselector.widget2
  */
 
-// Main jQuery function
+// Document.onReady
 $(function() {
     // Moved to sub-function to be able to fire on inserted form
-    s3_gis_locationselector_jQuery_onReady();
+    s3_gis_locationselector_onReady();
 });
 
-function s3_gis_locationselector_jQuery_onReady() {
+function s3_gis_locationselector_activate() {
+    // Called after form is inserted into page to activate
+    s3_gis_locationselector_onReady();
+}
+
+function s3_gis_locationselector_onReady() {
     if (typeof(S3.gis.location_id) != 'undefined') {
         // This page includes the Location Selector Widget
         // Hide the Label row
@@ -45,9 +51,6 @@ function s3_gis_locationselector_jQuery_onReady() {
 
         // Set initial Autocompletes
         s3_gis_autocompletes();
-
-        // Setup converter for latitude and longitude fields
-        s3_gis_lat_lon_converter();
 
         // Listen for Events & take appropriate Actions
 
@@ -128,53 +131,78 @@ function s3_gis_locationselector_jQuery_onReady() {
             }
         });
     }
-}
 
-// Main Ext function
-Ext.onReady(function(){
-    // Moved to sub-function to be able to fire on inserted form
-    s3_gis_locationselector_Ext_onReady();
-});
-
-function s3_gis_locationselector_Ext_onReady() {
     // Map Popup
-    var mapButton = Ext.get('gis_location_map-btn');
+    var mapButton = $('#gis_location_map-btn');
     if (mapButton) {
-        mapButton.on('click', function() {
-            // Find the map
-            var map_button = $('#gis_location_map-btn');
-            var map_id = map_button.attr('map');
-            if (undefined == map_id) {
-                map_id = 'default';
-            }
-            var map = S3.gis.maps[map_id];
-            map.s3.mapWin.show();
-            if (map.s3.polygonButton) {
-                var wkt = $('#gis_location_wkt').val();
-                if (!wkt) {
-                    // Enable the crosshair on the Map Selector
-                    $('.olMapViewport').addClass('crosshair');
-                    // Enable the Control
-                    map.s3.polygonButton.control.activate();
-                }
-            } else {
-                var lat = $('#gis_location_lat').val();
-                var lon = $('#gis_location_lon').val();
-                if (!lat || !lon) {
-                    // Enable the crosshair on the Map Selector
-                    $('.olMapViewport').addClass('crosshair');
-                    // Enable the Control
-                    map.s3.pointButton.control.activate();
-                }
-            }
-        });
-    }
-}
+        var map_id = mapButton.attr('map');
+        // Find the map
+        if (undefined == map_id) {
+            map_id = 'default_map';
+        }
+        /**
+         * Check that Map JS is Loaded
+         */
+        var jsLoaded = function() {
+            var dfd = new jQuery.Deferred();
 
-function s3_gis_locationselector_activate() {
-    // Called after form is inserted into page to activate
-    s3_gis_locationselector_jQuery_onReady();
-    s3_gis_locationselector_Ext_onReady();
+            // Test every half-second
+            setTimeout(function working() {
+                if (S3.gis.maps != undefined) {
+                    dfd.resolve('loaded');
+                } else if (dfd.state() === 'pending') {
+                    // Notify progress
+                    dfd.notify('waiting for JS to load...');
+                    // Loop
+                    setTimeout(working, 500);
+                } else {
+                    // Failed!?
+                }
+            }, 1);
+
+            // Return the Promise so caller can't change the Deferred
+            return dfd.promise();
+        };
+
+        // Check if Maps JS is Loaded
+        $.when(jsLoaded()).then(
+            function(status) {
+                // Success: Instantiate Maps
+                var map = S3.gis.maps[map_id];
+
+                // Point Placed callback
+                map.s3.pointPlaced = function(feature) {
+                    var centerPoint = feature.geometry.getBounds().getCenterLonLat();
+                    centerPoint.transform(map.getProjectionObject(), S3.gis.proj4326);
+                    $('#gis_location_lon').val(centerPoint.lon);
+                    $('#gis_location_lat').val(centerPoint.lat);
+                    $('#gis_location_wkt').val('');
+                };
+
+                mapButton.click(function() {
+                    map.s3.mapWin.show();
+                    if (map.s3.polygonButton) {
+                        var wkt = $('#gis_location_wkt').val();
+                        if (!wkt) {
+                            // Enable the crosshair on the Map Selector
+                            $('.olMapViewport').addClass('crosshair');
+                            // Enable the Control
+                            map.s3.polygonButton.control.activate();
+                        }
+                    } else {
+                        var lat = $('#gis_location_lat').val();
+                        var lon = $('#gis_location_lon').val();
+                        if (!lat || !lon) {
+                            // Enable the crosshair on the Map Selector
+                            $('.olMapViewport').addClass('crosshair');
+                            // Enable the Control
+                            map.s3.pointButton.control.activate();
+                        }
+                    }
+                });
+            }
+        );
+    }
 }
 
 function s3_gis_autocompletes() {
@@ -188,36 +216,67 @@ function s3_gis_autocompletes() {
 
 function s3_gis_autocomplete(level) {
     // Convert Input to an Autocomplete
-    if (undefined != $('#gis_location_L' + level + '_ac').val()) {
-        $('#gis_location_L' + level + '_ac').autocomplete({
-            source: s3_gis_ac_set_source(level),
+    var dummy_input = $('#gis_location_L' + level + '_ac');
+    if (undefined != dummy_input.val()) {
+        var real_input = $('#gis_location_L' + level);
+        var throbber = $('#gis_location_L' + level + '_throbber');
+        dummy_input.autocomplete({
             delay: 500,
             minLength: 2,
+            source: function(request, response) {
+                // Patch the source so that we can handle No Matches
+                $.ajax({
+                    url: s3_gis_ac_set_source(level),
+                    data: {
+                        term: request.term
+                    }
+                }).done(function (data) {
+                    if (data.length == 0) {
+                        var no_matching_records = i18n.no_matching_records;
+                        data.push({
+                            id: 0,
+                            value: '',
+                            label: no_matching_records,
+                            name: no_matching_records
+                        });
+                    }
+                    response(data);
+                });
+            },
             search: function(event, ui) {
-                $('#gis_location_L' + level + '_throbber').removeClass('hide').show();
+                throbber.removeClass('hide').show();
                 // Wipe the existing ID so that update forms can change the values to new ones
-                $('#gis_location_L' + level).val('');
+                real_input.val('');
                 return true;
             },
             response: function(event, ui, content) {
-                $('#gis_location_L' + level + '_throbber').hide();
+                throbber.hide();
                 return content;
             },
-            focus: function( event, ui ) {
-                $('#gis_location_L' + level + '_ac').val( ui.item.name );
+            focus: function(event, ui) {
+                if (ui.item.id) {
+                    dummy_input.val(ui.item.name);
+                }
                 return false;
             },
-            select: function( event, ui ) {
-                $('#gis_location_L' + level + '_ac').val( ui.item.name );
-                $('#gis_location_L' + level).val( ui.item.id );
-                if ((ui.item.level == 'L1') && (ui.item.parent) && ($('#gis_location_L0').val() === '')) {
-                    // If no L0 set & we've just added an L1 with a parent then set the country accordingly
-                    $('#gis_location_L0').val(ui.item.parent);
+            select: function(event, ui) {
+                var item = ui.item;
+                if (item.id) {
+                    dummy_input.val(item.name);
+                    real_input.val(item.id);
+                    if ((item.level == 'L1') && (item.parent) && ($('#gis_location_L0').val() === '')) {
+                        // If no L0 set & we've just added an L1 with a parent then set the country accordingly
+                        $('#gis_location_L0').val(item.parent);
+                    }
+                    // Hide the search results
+                    $('ul.ui-autocomplete').hide();
+                    // Update autocompletes
+                    s3_gis_autocomplete(parseInt(item.level.replace('L', ''), 10) + 1);
+                } else {
+                    // No matching results
+                    //dummy_input.val('');
+                    real_input.val('').change();
                 }
-                // Hide the search results
-                $('ul.ui-autocomplete').hide();
-                // Update autocompletes
-                s3_gis_autocomplete(parseInt(ui.item.level.replace('L', ''), 10) + 1);
                 return false;
             }
         }).data('ui-autocomplete')._renderItem = function(ul, item) {
@@ -228,43 +287,72 @@ function s3_gis_autocomplete(level) {
         };
     }
     // OnChange invalidate all lower Lx
-    $('#gis_location_L' + level + '_ac').change(function() {
+    dummy_input.change(function() {
         for (var i = level + 1; i <= 5; i++) {
-            // Clear the Value
+            // Clear the Value in both real & dummy
             $('#gis_location_L' + i + ', #gis_location_L' + i + '_ac').val('');
         }
     });
 }
 
 function s3_gis_autocomplete_search() {
-    if (undefined != $('#gis_location_search_ac').val()) {
-        $('#gis_location_search_ac').autocomplete({
-            source: s3_gis_ac_set_search_source(),
+    var dummy_input = $('#gis_location_search_ac');
+    if (undefined != dummy_input.val()) {
+        var throbber = $('#gis_location_search_throbber');
+        dummy_input.autocomplete({
             delay: 500,
             minLength: 2,
+            source: function(request, response) {
+                // Patch the source so that we can handle No Matches
+                $.ajax({
+                    url: s3_gis_ac_set_search_source(),
+                    data: {
+                        term: request.term
+                    }
+                }).done(function (data) {
+                    if (data.length == 0) {
+                        var no_matching_records = i18n.no_matching_records;
+                        data.push({
+                            id: 0,
+                            value: '',
+                            label: no_matching_records,
+                            name: no_matching_records
+                        });
+                    }
+                    response(data);
+                });
+            },
             search: function(event, ui) {
-                $('#gis_location_search_throbber').removeClass('hide').show();
+                throbber.removeClass('hide').show();
                 // Hide the Select Button
                 $('#gis_location_search_select-btn').hide();
                 return true;
             },
             response: function(event, ui, content) {
-                $('#gis_location_search_throbber').hide();
+                throbber.hide();
                 return content;
             },
-            focus: function( event, ui ) {
-                $('#gis_location_search_ac').val( ui.item.name );
+            focus: function(event, ui) {
+                if (ui.item.id) {
+                    dummy_input.val(ui.item.name);
+                }
                 return false;
             },
-            select: function( event, ui ) {
-                $('#gis_location_search_ac').val( ui.item.name );
-                // Hide the search results
-                $('ul.ui-autocomplete').hide();
-                // Show details
-                s3_gis_ac_search_selected(ui.item);
+            select: function(event, ui) {
+                var item = ui.item;
+                if (item.id) {
+                    dummy_input.val(item.name);
+                    // Hide the search results
+                    $('ul.ui-autocomplete').hide();
+                    // Show details
+                    s3_gis_ac_search_selected(item);
+                } else {
+                    // No matching results
+                    dummy_input.val('');
+                }
                 return false;
             }
-        }).data( 'ui-autocomplete' )._renderItem = function( ul, item ) {
+        }).data('ui-autocomplete')._renderItem = function(ul, item) {
         	var represent;
             if (item.name && item.addr_street) {
                 represent = '<a>' + item.name + ',  ' + item.addr_street.split(',')[0].split('\n')[0] + '</a>';
@@ -308,13 +396,13 @@ function s3_gis_ac_set_source(level) {
     var source;
     if (parent) {
         // Filter on parent
-        source = S3.gis.url + '/search.json?filter=~&field=name&level=L' + level + '&parent=' + parent;
+        source = S3.gis.url + '/search_ac?loc_select=1&level=L' + level + '&parent=' + parent;
     } else if (grandparent) {
         // Filter on children (slower)
-        source = S3.gis.url + '/search.json?filter=~&field=name&level=L' + level + '&children=' + grandparent;
+        source = S3.gis.url + '/search_ac?loc_select=1&level=L' + level + '&children=' + grandparent;
     } else {
         // No Filter possible beyond Level
-        source = S3.gis.url + '/search.json?filter=~&field=name&level=L' + level;
+        source = S3.gis.url + '/search_ac?loc_select=1&level=L' + level;
     }
     return source;
 }
@@ -325,7 +413,7 @@ function s3_gis_ac_set_search_source() {
     // @ToDo: Read Hierarchical Filters
 
     // Search all specific locations
-    var source = S3.gis.url + '/search.json?filter=~&field=name&field2=addr_street&level=nullnone';
+    var source = S3.gis.url + '/search_ac?loc_select=1&field2=addr_street&level=nullnone';
 
     return source;
 }
@@ -424,186 +512,6 @@ function s3_gis_ac_search_selected(location) {
     }
 }
 
-function s3_gis_lat_lon_converter() {
-    // Set up the lat_lon converter
-    var nanError = i18n.gis_only_numbers,
-        rangeError = i18n.gis_range_error;
-
-    function isNum(n) {
-      return !isNaN(parseFloat(n)) && isFinite(n);
-    }
-
-    function get_wrap(e) {
-        return e.parents('.gis_coord_wrap').eq(0);
-    }
-
-    function set($e) {
-        return function (v) {
-            // clear and focus or set a field
-            $e.val(v||'');
-            if (typeof(v) == 'undefined') $e.focus();
-        };
-    }
-
-    function get_dms(dec) {
-        var d = Math.abs(dec),
-            m = (d - parseInt(d, 10)) * 60;
-
-        // Stop integer values of m from being approximated
-        if (Math.abs(m - Math.round(m)) < 1e-10) {
-            m = Math.round(m);
-            s = 0;
-        } else {
-            var s = (m - parseInt(m, 10)) * 60;
-
-            // Stop integer values of s from being approximated
-            if (Math.abs(s - Math.round(s)) < 1e-10)
-                s = Math.round(s);
-        }
-
-        return { d: parseInt(dec, 10),
-                 m: parseInt(m, 10),
-                 s: s
-               };
-    }
-
-    function get_float(d, m, s) {
-        return (d < 0 ? -1 : 1) * 
-                (Math.abs(d) +
-                 m / 60 +
-                 s / 3600);
-    }
-
-    function to_decimal(wrap) {
-
-        var d = $('.degrees', wrap).val() || 0,
-            m = $('.minutes', wrap).val() || 0,
-            s = $('.seconds', wrap).val() || 0,
-
-            set_d = set($('.degrees', wrap)),
-            set_m = set($('.minutes', wrap)),
-            set_s = set($('.seconds', wrap)),
-            set_dec = set($('.decimal', wrap)),
-
-            isLat = $('.decimal', wrap).attr('id') == 'gis_location_lat';
-
-        // validate degrees
-        if (!isNum(d)) {
-            alert(nanError.degrees);
-            set_d();
-            return;
-        }
-
-        d = Number(d);
-        if (Math.abs(d) > (isLat ? 90 : 180)) {
-            alert(rangeError.degrees[isLat? 'lat' : 'lon']);
-            set_d();
-            return;
-        }
-
-        // validate minutes
-        if (!isNum(m)) {
-            alert(nanError.minutes);
-            set_m();
-            return;
-        }
-
-        m = Math.abs(m);
-        if (m > 60) {
-            alert(rangeError.minutes);
-            set_m();
-            return;
-        }
-
-        // validate seconds
-        if (!isNum(s)) {
-            alert(nanError.seconds);
-            set_s();
-            return;
-        }
-
-        s = Math.abs(s);
-        if (s >= 60) {
-            alert(rangeError.seconds);
-            set_s();
-            return;
-        }
-
-        // Normalize all the values
-        // Degrees and Minutes as integers
-        var decimal = get_float(d, m, s);
-
-        if (Math.abs(decimal) > (isLat ? 90 : 180)) {
-            alert(rangeError.decimal[isLat? 'lat' : 'lon']);
-            return;
-        }
-
-        var dms = get_dms(decimal);
-
-        set_dec('' + decimal);
-        set_d(dms.d || '0');
-        set_m(dms.m || '0');
-        set_s(dms.s || '0');
-    }
-
-    $('.gis_coord_dms input').blur(function () {
-        to_decimal(get_wrap($(this)));
-    }).keypress(function(e) {
-        if (e.which == 13) e.preventDefault();
-    });
-
-    function to_dms(wrap) {
-        var field = $('.decimal', wrap),
-            dec = field.val(),
-            isLat = $('.decimal', wrap).attr('id') == 'gis_location_lat';
-        if (dec === '') return;
-        if (!isNum(dec)) {
-            alert(nanError.decimal);
-            field.val('').focus();
-            return;
-        }
-        dec = Number(dec);
-        if (Math.abs(dec) > (isLat ? 90 : 180)) {
-            alert(rangeError.decimal[isLat? 'lat' : 'lon']);
-            field.focus();
-            return;
-        }
-        var dms = get_dms(dec);
-        $('.degrees', wrap).val(dms.d || '0');
-        $('.minutes', wrap).val(dms.m || '0');
-        $('.seconds', wrap).val(dms.s || '0');
-    }
-
-    $('.gis_coord_decimal input').blur(function () {
-        to_dms(get_wrap($(this)));
-    }).keypress(function(e) {
-        if (e.which == 13) e.preventDefault();
-    });
-
-    $('.gis_coord_switch_dms').click(function (evt) {
-        $('.gis_coord_dms').show();
-        $('.gis_coord_decimal').hide();
-        $('.gis_coord_wrap').each(function () {
-            to_dms($(this));
-        });
-        evt.preventDefault();
-    });
-
-    $('.gis_coord_switch_decimal').click(function (evt) {
-        $('.gis_coord_decimal').show();
-        $('.gis_coord_dms').hide();
-        $('.gis_coord_wrap').each(function () {
-            to_decimal($(this));
-        });
-        evt.preventDefault();
-    });
-
-    // Initially fill up the dms boxes
-    $('.gis_coord_wrap').each(function () {
-        to_dms($(this));
-    });
-}
-
 function s3_gis_search_hierarchy(location_id, recursive, last) {
     // Do an async lookup of Hierarchy when a specific value is found
     // Recursive needed when we just have Parent.
@@ -615,28 +523,27 @@ function s3_gis_search_hierarchy(location_id, recursive, last) {
     $.ajax({
         async: true,
         url: url,
-        dataType: 'json',
-        success: function(data) {
-            if (data[0].id == location_id) {
-                // Parse the new location
-                var name = data[0].name;
-                var level = data[0].level;
-                var parent = data[0].parent;
+        dataType: 'json'
+    }).done(function(data) {
+        if (data[0].id == location_id) {
+            // Parse the new location
+            var name = data[0].name;
+            var level = data[0].level;
+            var parent = data[0].parent;
 
-                // Store the ID for later retrieval (in case we 'Select' this Location)
-                $('body').data(level, location_id);
+            // Store the ID for later retrieval (in case we 'Select' this Location)
+            $('body').data(level, location_id);
 
-                // Display the details for this level
-                $('#gis_location_' + level + '_search').val(name);
-                $('#gis_location_' + level + '_label__row').removeClass('hide').show();
-                $('#gis_location_' + level + '_search__row').removeClass('hide').show();
-                if (recursive && parent) {
-                    s3_gis_search_hierarchy(parent, true, true);
-                } else if (last) {
-                    $('#gis_location_search_throbber').hide();
-                    // Display the Select Button
-                    $('#gis_location_search_select-btn').removeClass('hide').show();
-                }
+            // Display the details for this level
+            $('#gis_location_' + level + '_search').val(name);
+            $('#gis_location_' + level + '_label__row').removeClass('hide').show();
+            $('#gis_location_' + level + '_search__row').removeClass('hide').show();
+            if (recursive && parent) {
+                s3_gis_search_hierarchy(parent, true, true);
+            } else if (last) {
+                $('#gis_location_search_throbber').hide();
+                // Display the Select Button
+                $('#gis_location_search_select-btn').removeClass('hide').show();
             }
         }
     });
@@ -662,86 +569,91 @@ function s3_gis_l0_select() {
     $.ajax({
         async: true,
         url: url,
-        dataType: 'json',
-        success: function(data) {
-            if (data.id == L0) {
-                // Store the code (for the Geocoder)
-                S3.gis.country = data.code;
-                // Read which hierarchy levels we have & their labels
-                for (level = 1; level <= 5; level++) {
-                    var _level = 'L' + level;
-                    if (data[_level]) {
-                        // Replace the label
-                        $('#gis_location_' + _level + '_label__row label').text(data[_level] + ':');
-                        s3_gis_show_level(level);
-                        // Replace the Help Tip
-                        //var tooltip = $('#gis_location_' + _level + '__row div.tooltip');
-                        //var old_title = tooltip.attr('title');
-                        //var parts = old_title.split('|');
-                        //var newtitle = data[_level] + '|' + parts[1]+ '|' + parts[2];
-                        //tooltip.attr('title', newtitle);
-                        // Re-apply Cluetip so that it sees the new value
-                        //tooltip.cluetip({activation: 'hover', sticky: false, splitTitle: '|'});
-                    } else {
-                        s3_gis_hide_level(level);
-                    }
-                    // Clear the value
-                    $('#gis_location_' + _level + ', #gis_location_' + _level + '_ac').val('');
+        dataType: 'json'
+    }).done(function(data) {
+        if (data.id == L0) {
+            // Store the code (for the Geocoder)
+            S3.gis.country = data.code;
+            // Read which hierarchy levels we have & their labels
+            for (level = 1; level <= 5; level++) {
+                var _level = 'L' + level;
+                if (data[_level]) {
+                    // Replace the label
+                    $('#gis_location_' + _level + '_label__row label').text(data[_level] + ':');
+                    s3_gis_show_level(level);
+                    // Replace the Help Tip
+                    //var tooltip = $('#gis_location_' + _level + '__row div.tooltip');
+                    //var old_title = tooltip.attr('title');
+                    //var parts = old_title.split('|');
+                    //var newtitle = data[_level] + '|' + parts[1]+ '|' + parts[2];
+                    //tooltip.attr('title', newtitle);
+                    // Re-apply Cluetip so that it sees the new value
+                    //tooltip.cluetip({activation: 'hover', sticky: false, splitTitle: '|'});
+                } else {
+                    s3_gis_hide_level(level);
                 }
-                if ( !S3.gis.no_map ) {
-                    // Zoom the Map?
-                    var lat = $('#gis_location_lat').val();
-                    var lon = $('#gis_location_lon').val();
-                    if (!lat && !lon) {
-                        // If no LatLon already set then Zoom the map to the appropriate location
-                        var left = data.lon_min;
-                        var bottom = data.lat_min;
-                        var right = data.lon_max;
-                        var top = data.lat_max;
-                        if (left && bottom && right && top) {
-                            // If we have Bounds then Zoom to the Bounds
-                            s3_gis_zoomMap(left, bottom, right, top);
-                        } else {
-                            lat = data.lat;
-                            lon = data.lon;
-                            if (lat && lon) {
-                                // Otherwise, simply Center the map
-                                // @ToDo: Support non-default maps
-                                var map = S3.gis.maps['default'];
-                                var newPoint = new OpenLayers.LonLat(lon, lat);
-                                newPoint.transform(S3.gis.proj4326, map.getProjectionObject());
-                                if (map.s3.mapWin.rendered) {
-                                    // Map has been opened, so center directly
-                                    map.setCenter(newPoint);
-                                } else {
-                                    // Map hasn't yet been opened, so change the mapPanel ready for when it is
-                                    map.s3.mapPanel.center = newPoint;
-                                }
+                // Clear the value
+                $('#gis_location_' + _level + ', #gis_location_' + _level + '_ac').val('');
+            }
+            if ( !S3.gis.no_map ) {
+                // Zoom the Map?
+                var lat = $('#gis_location_lat').val();
+                var lon = $('#gis_location_lon').val();
+                if (!lat && !lon) {
+                    // If no LatLon already set then Zoom the map to the appropriate location
+                    var left = data.lon_min;
+                    var bottom = data.lat_min;
+                    var right = data.lon_max;
+                    var top = data.lat_max;
+                    if (left && bottom && right && top) {
+                        // If we have Bounds then Zoom to the Bounds
+                        s3_gis_zoomMap(left, bottom, right, top);
+                    } else {
+                        lat = data.lat;
+                        lon = data.lon;
+                        if (lat && lon) {
+                            // Otherwise, simply Center the map
+                            // @ToDo: Support non-default maps
+                            var map = S3.gis.maps['default_map'];
+                            var newPoint = new OpenLayers.LonLat(lon, lat);
+                            newPoint.transform(S3.gis.proj4326, map.getProjectionObject());
+                            if (map.s3.mapWin.rendered) {
+                                // Map has been opened, so center directly
+                                map.setCenter(newPoint);
+                            } else {
+                                // Map hasn't yet been opened, so change the mapPanel ready for when it is
+                                map.s3.mapPanel.center = newPoint;
                             }
                         }
                     }
                 }
-                // @ToDo: Are we operating in mode strict?
-                //        - these will need adding to the output if we need them
-                // Store in global var?
-                //data.strict_hierarchy;
-                //data.location_parent_required;
             }
+            // @ToDo: Are we operating in mode strict?
+            //        - these will need adding to the output if we need them
+            // Store in global var?
+            //data.strict_hierarchy;
+            //data.location_parent_required;
         }
     });
 
     // Set the Autocompletes' filters
+    /* Not needed since now looked-up dynamically
     $('#gis_location_L1_ac').autocomplete('option', 'source', s3_gis_ac_set_source(1));
     $('#gis_location_L2_ac').autocomplete('option', 'source', s3_gis_ac_set_source(2));
     $('#gis_location_L3_ac').autocomplete('option', 'source', s3_gis_ac_set_source(3));
     $('#gis_location_L4_ac').autocomplete('option', 'source', s3_gis_ac_set_source(4));
-    $('#gis_location_L5_ac').autocomplete('option', 'source', s3_gis_ac_set_source(5));
+    $('#gis_location_L5_ac').autocomplete('option', 'source', s3_gis_ac_set_source(5));*/
 }
 
 function s3_gis_zoomMap(left, bottom, right, top) {
+    var maps = S3.gis.maps;
+    if (!maps) {
+        // Map JS not yet loaded - skip
+        return;
+    }
     // Zoom the Map to the specified bounds
     // @ToDo: Support non-default maps
-    var map = S3.gis.maps['default'];
+    var map = S3.gis.maps['default_map'];
     var proj4326 = S3.gis.proj4326;
     var projection_current = map.getProjectionObject();
     if (map.s3.mapWin.rendered) {
@@ -1319,7 +1231,7 @@ function s3_gis_geocode(active) {
         if (status == google.maps.GeocoderStatus.OK) {
 
             // @ToDo: Support non-default maps
-            var map = S3.gis.maps['default'];
+            var map = S3.gis.maps['default_map'];
 
             // Parse the returned Location
             var myLatLng = results[0].geometry.location;

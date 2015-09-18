@@ -10,10 +10,27 @@ if not settings.has_module(module):
 def index():
     """ Module Homepage """
 
-    # @todo: have a link to the fire station the current user works at
-
     module_name = settings.modules[module].name_nice
     response.title = module_name
+
+    htable = s3db.fire_shift_staff
+    stable = s3db.fire_station
+    station_id = None
+    station_name = None
+
+    human_resource_id = auth.s3_logged_in_human_resource()
+    query = htable.human_resource_id == human_resource_id
+
+    left = htable.on(htable.station_id == stable.id)
+
+    row = db(query).select(htable.station_id,
+                           stable.name,
+                           left = left,
+                           limitby = (0, 1),
+                           ).first()
+    if row:
+        station_id = row.fire_shift_staff.station_id
+        station_name = row.fire_station.name
 
     # Note that this requires setting the Porto Incident Types in modules/s3db/irs.py
     incidents = DIV(A(DIV(T("Fire"),
@@ -32,8 +49,11 @@ def index():
                       _href=URL(c="irs", f="ireport", args=["create"],
                                 vars={"type":"hazmat"})))
 
-    return dict(module_name=module_name,
-                incidents=incidents)
+    return dict(incidents = incidents,
+                station_id = station_id,
+                station_name = station_name,
+                module_name = module_name,
+                )
 
 # -----------------------------------------------------------------------------
 def zone():
@@ -66,13 +86,16 @@ def station():
 
         if r.interactive:
             if r.component:
-                # remove CRUD generated buttons in the tabs
-                s3db.configure("inv_inv_item",
-                               create=False,
-                               listadd=False,
-                               editable=False,
-                               deletable=False,
-                               )
+                if r.component.name == "human_resource":
+                    s3db.org_site_staff_config(r)
+                elif r.component.name == "inv_item":
+                    # remove CRUD generated buttons in the tabs
+                    s3db.configure("inv_inv_item",
+                                   create = False,
+                                   deletable = False,
+                                   editable = False,
+                                   listadd = False,
+                                   )
             elif r.method == "update":
                 field = r.table.obsolete
                 field.readable = field.writable = True

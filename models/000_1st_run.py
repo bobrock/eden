@@ -6,13 +6,21 @@
     - If needed, copy deployment templates to the live installation.
 """
 
+# Debug why Eclipse breakpoints are ignored
+# http://stackoverflow.com/questions/29852426/pydev-ignoring-breakpoints
+#import sys
+#def trace_func(frame, event, arg):
+#    print 'Context: ', frame.f_code.co_name, '\tFile:', frame.f_code.co_filename, '\tLine:', frame.f_lineno, '\tEvent:', event
+#    return trace_func
+#sys.settrace(trace_func)
+
 # -----------------------------------------------------------------------------
 # Perform update checks - will happen in 1st_run or on those upgrades when new
 # dependencies have been added.
 
 # Increment this when new dependencies are added
 # This will be compared to the version in the 0000_update_check.py 'canary' file.
-CURRENT_UPDATE_CHECK_ID = 3
+CURRENT_UPDATE_CHECK_ID = 4
 update_check_needed = False
 try:
     if CANARY_UPDATE_CHECK_ID != CURRENT_UPDATE_CHECK_ID:
@@ -42,7 +50,7 @@ if update_check_needed:
     try:
         import s3 as s3base
     except Exception, e:
-        errors.extend(e.message)
+        errors.append(e.message)
 
     import sys
 
@@ -51,13 +59,15 @@ if update_check_needed:
         prefix = "\n%s: " % T("WARNING")
         msg = prefix + prefix.join(warnings)
         print >> sys.stderr, msg
-
     if errors:
         # Report errors and stop.
-        prefix = "\n%s: " % T("ACTION REQUIRED")
+        actionrequired = T("ACTION REQUIRED")
+        prefix = "\n%s: " % actionrequired
         msg = prefix + prefix.join(errors)
         print >> sys.stderr, msg
-        raise HTTP(500, body=msg)
+        htmlprefix = "\n<br /><b>%s</b>: " % actionrequired
+        html = "<errors>" + htmlprefix + htmlprefix.join(errors) + "\n</errors>"
+        raise HTTP(500, body=html)
 
     # Create or update the canary file.
     from gluon import portalocker
@@ -70,9 +80,15 @@ if update_check_needed:
 
 # -----------------------------------------------------------------------------
 import os
+try:
+    # Python 2.7
+    from collections import OrderedDict
+except:
+    # Python 2.6
+    from gluon.contrib.simplejson.ordered_dict import OrderedDict
+
 from gluon import current
 from gluon.storage import Storage
-from gluon.contrib.simplejson.ordered_dict import OrderedDict
 
 # Keep all S3 framework-level elements stored in response.s3, so as to avoid
 # polluting global namespace & to make it clear which part of the framework is
@@ -91,11 +107,24 @@ settings = s3cfg.S3Config()
 current.deployment_settings = deployment_settings = settings
 
 def template_path():
-    " Return the path of the Template config.py to load "
+    """
+        Return the path of the Template config.py to load
+
+        @todo: deprecated, S3Config finds the path itself,
+               modern 000_config.py should not use this anymore
+    """
+
     path = os.path.join(request.folder,
-                        "private", "templates",
+                        "modules",
+                        "templates",
                         settings.get_template(),
                         "config.py")
+    if not os.path.exists(path):
+        path = os.path.join(request.folder,
+                            "private",
+                            "templates",
+                            settings.get_template(),
+                            "config.py")
     return path
 
 # END =========================================================================

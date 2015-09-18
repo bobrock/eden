@@ -25,7 +25,8 @@ def download():
 
     # Load the Model
     tablename = filename.split(".", 1)[0]
-    table = s3db[tablename]
+    if "_" in tablename:
+        table = s3db.table(tablename)
 
     return response.download(request, db)
 
@@ -33,20 +34,30 @@ def download():
 def register_validation(form):
     """ Validate the fields in registration form """
 
-    vars = form.vars
+    form_vars = form.vars
+
     # Mobile Phone
-    if "mobile" in vars and vars.mobile:
+    mobile = form_vars.get("mobile")
+    if mobile:
         import re
         regex = re.compile(single_phone_number_pattern)
-        if not regex.match(vars.mobile):
+        if not regex.match(mobile):
             form.errors.mobile = T("Invalid phone number")
     elif settings.get_auth_registration_mobile_phone_mandatory():
         form.errors.mobile = T("Phone number is required")
 
+    # Home Phone
+    home = form_vars.get("home")
+    if home:
+        import re
+        regex = re.compile(single_phone_number_pattern)
+        if not regex.match(home):
+            form.errors.home = T("Invalid phone number")
+
     org = settings.get_auth_registration_organisation_id_default()
     if org:
         # Add to default organisation
-        vars.organisation_id = org
+        form_vars.organisation_id = org
 
     return
 
@@ -57,44 +68,60 @@ def index():
     auth.settings.register_onvalidation = register_validation
     auth.configure_user_fields()
 
-    page = request.args(0)
+    page = None
+    if len(request.args):
+        # Use the first non-numeric argument as page name
+        # (RESTful custom controllers may have record IDs in Ajax URLs)
+        for arg in request.args:
+            pname = arg.split(".", 1)[0] if "." in arg else arg
+            if not pname.isdigit():
+                page = pname
+                break
+
+    custom = None
     if page:
-        # Go to a custom page
-        # Arg 1 = function in /private/templates/<template>/controllers.py
-        # other Args & Vars passed through
-        controller = "applications.%s.private.templates.%s.controllers" % \
-                            (appname, settings.get_template())
+        # Go to a custom page,
+        # - args[0] = name of the class in /modules/templates/<template>/controllers.py
+        # - other args & vars passed through
+        template = settings.get_template()
+        location = settings.get_template_location()
+        package = "applications.%s.%s.templates.%s" % \
+                    (appname, location, template)
+        name = "controllers"
         try:
-            exec("import %s as custom" % controller)
-        except ImportError, e:
+            custom = getattr(__import__(package, fromlist=[name]), name)
+        except (ImportError, AttributeError):
             # No Custom Page available, continue with the default
-            page = "private/templates/%s/controllers.py" % \
-                        settings.get_template()
-            s3base.s3_debug("File not loadable: %s, %s" % (page, e.message))
+            page = "%s/templates/%s/controllers.py" % (location, template)
+            current.log.warning("File not loadable",
+                                "%s, %s" % (page, sys.exc_info()[1]))
         else:
-            if "." in page:
-                # Remove extension
-                page = page.split(".", 1)[0]
-            if page in custom.__dict__:
-                exec ("output = custom.%s()()" % page)
-                return output
+            if hasattr(custom, page):
+                controller = getattr(custom, page)()
             elif page != "login":
                 raise(HTTP(404, "Function not found: %s()" % page))
             else:
-                output = custom.index()()
-                return output
+                controller = custom.index()
+            output = controller()
+            return output
+
     elif settings.get_template() != "default":
         # Try a Custom Homepage
-        controller = "applications.%s.private.templates.%s.controllers" % \
-                            (appname, settings.get_template())
+        package = "applications.%s.%s.templates.%s" % \
+                    (appname,
+                     settings.get_template_location(),
+                     settings.get_template())
+        name = "controllers"
         try:
-            exec("import %s as custom" % controller)
-        except ImportError, e:
+            custom = getattr(__import__(package, fromlist=[name]), name)
+        except (ImportError, AttributeError):
             # No Custom Page available, continue with the default
             # @ToDo: cache this result in session
-            s3base.s3_debug("Custom homepage cannot be loaded: %s" % e.message)
+            import sys
+            current.log.warning("Custom homepage cannot be loaded",
+                                sys.exc_info()[1])
         else:
-            if "index" in custom.__dict__:
+            if hasattr(custom, "index"):
                 output = custom.index()()
                 return output
 
@@ -108,6 +135,7 @@ def index():
         table = s3db.cms_post
         ltable = s3db.cms_post_module
         query = (ltable.module == module) & \
+                ((ltable.resource == None) | (ltable.resource == "index")) & \
                 (ltable.post_id == table.id) & \
                 (table.deleted != True)
         item = db(query).select(table.body,
@@ -123,76 +151,41 @@ def index():
     else:
         SHELTERS = ""
 
-    # Menu Boxes
-    menu_btns = [#div, label, app, function
-                 ["facility", T("Facilities"), "org", "facility"],
-                 ["facility", T("Hospitals"), "hms", "hospital"],
-                 ["facility", T("Offices"), "org", "office"],
-                 ["facility", SHELTERS, "cr", "shelter"],
-                 ["facility", T("Warehouses"), "inv", "warehouse"],
-                 ["sit", T("Staff"), "hrm", "staff"],
-                 ["sit", T("Volunteers"), "vol", "volunteer"],
-                 ["sit", T("Incidents"), "irs", "ireport"],
-                 ["sit", T("Assessments"), "survey", "series"],
-                 ["sit", T("Assets"), "asset", "asset"],
-                 ["sit", T("Inventory Items"), "inv", "inv_item"],
-                 #["dec", T("Gap Map"), "project", "gap_map"],
-                 #["dec", T("Gap Report"), "project", "gap_report"],
-                 ["dec", T("Requests"), "req", "req"],
-                 ["res", T("Projects"), "project", "project"],
-                 ["res", T("Commitments"), "req", "commit"],
-                 ["res", T("Sent Shipments"), "inv", "send"],
-                 ["res", T("Received Shipments"), "inv", "recv"],
-                ]
+    # Menu boxes
+    from s3layouts import S3HomepageMenuLayout as HM
 
-    # Change to (Mitigation)/Preparedness/Response/Recovery?
-    menu_divs = {"facility": DIV(H3(T("Facilities")),
-                                 _id = "facility_box",
-                                 _class = "menu_box",
-                                 ),
-                 "sit": DIV(H3(T("Situation")),
-                            _id = "menu_div_sit",
-                            _class = "menu_div",
-                            ),
-                 "dec": DIV(H3(T("Decision")),
-                            _id = "menu_div_dec",
-                            _class = "menu_div",
-                            ),
-                 "res": DIV(H3(T("Response")),
-                            _id = "menu_div_res",
-                            _class = "menu_div",
-                            ),
-                 }
+    sit_dec_res_box = HM(_class="fleft swidth", arrows=True)(
+        HM("Situation")(
+            HM("Staff", c="hrm", f="staff", t="hrm_human_resource"),
+            HM("Volunteers", c="vol", f="volunteer", t="hrm_human_resource"),
+            HM("Incidents", c="event", f="incident_report"),
+            HM("Assessments", c="survey", f="series"),
+            HM("Assets", c="asset", f="asset"),
+            HM("Inventory Items", c="inv", f="inv_item"),
+        ),
+        HM("Decision")(
+            #HM("Gap Map", c="project", f="gap_map"),
+            #HM("Gap Report", c="project", f="gap_report"),
+            HM("Requests", c="req", f="req"),
+        ),
+        HM("Response")(
+            HM("Projects", c="project", f="project"),
+            HM("Commitments", c="req", f="commit"),
+            HM("Sent Shipments", c="inv", f="send"),
+            HM("Received Shipments", c="inv", f="recv"),
+        ),
+    )
 
-    for div, label, app, function in menu_btns:
-        if has_module(app):
-            # @ToDo: Also check permissions (e.g. for anonymous users)
-            menu_divs[div].append(A(DIV(label,
-                                        _class = "menu-btn-r"),
-                                    _class = "menu-btn-l",
-                                    _href = URL(app, function)
-                                    )
-                                 )
-
-    div_arrow = DIV(IMG(_src = "/%s/static/img/arrow_blue_right.png" % \
-                                 appname),
-                    _class = "div_arrow")
-    sit_dec_res_box = DIV(menu_divs["sit"],
-                          div_arrow,
-                          menu_divs["dec"],
-                          div_arrow,
-                          menu_divs["res"],
-                          _id = "sit_dec_res_box",
-                          _class = "menu_box fleft swidth"
-                     #div_additional,
-                    )
-    facility_box  = menu_divs["facility"]
-    facility_box.append(A(IMG(_src = "/%s/static/img/map_icon_128.png" % \
-                                       appname),
-                          _href = URL(c="gis", f="index"),
-                          _title = T("Map")
-                          )
-                        )
+    facility_box = HM("Facilities", _id="facility_box")(
+        HM("Facilities", c="org", f="facility"),
+        HM("Hospitals", c="hms", f="hospital"),
+        HM("Offices", c="org", f="office"),
+        HM(SHELTERS, c="cr", f="shelter"),
+        HM("Warehouses", c="inv", f="warehouse"),
+        HM("Map", c="gis", f="index",
+           icon="/%s/static/img/map_icon_128.png" % appname,
+           ),
+    )
 
     # Check logged in AND permissions
     roles = session.s3.roles
@@ -201,46 +194,47 @@ def index():
     if AUTHENTICATED in roles and \
        has_permission("read", table):
         org_items = organisation()
-        datatable_ajax_source = "/%s/default/organisation.aadata" % \
-                                appname
+        datatable_ajax_source = "/%s/default/organisation.aadata" % appname
         s3.actions = None
         response.view = "default/index.html"
         permission = auth.permission
         permission.controller = "org"
         permission.function = "site"
         permitted_facilities = auth.permitted_facilities(redirect_on_error=False)
-        manage_facility_box = ""
         if permitted_facilities:
-            facility_list = s3base.s3_represent_facilities(db, permitted_facilities,
-                                                           link=False)
+            facilities = s3db.org_SiteRepresent().bulk(permitted_facilities,
+                                                       include_blank=False)
+            facility_list = [(fac, facilities[fac]) for fac in facilities]
             facility_list = sorted(facility_list, key=lambda fac: fac[1])
-            facility_opts = [OPTION(opt[1], _value = opt[0])
-                             for opt in facility_list]
-            if facility_list:
-                manage_facility_box = DIV(H3(T("Manage Your Facilities")),
-                                          SELECT(_id = "manage_facility_select",
-                                                 _style = "max-width:400px;",
-                                                 *facility_opts
-                                                 ),
-                                          A(T("Go"),
-                                            _href = URL(c="default", f="site",
-                                                        args=[facility_list[0][0]]),
-                                            #_disabled = "disabled",
-                                            _id = "manage_facility_btn",
-                                            _class = "action-btn"
-                                            ),
-                                          _id = "manage_facility_box",
-                                          _class = "menu_box fleft"
-                                          )
-                s3.jquery_ready.append(
+            facility_opts = [OPTION(fac[1], _value=fac[0])
+                             for fac in facility_list]
+            manage_facility_box = DIV(H3(T("Manage Your Facilities")),
+                                      SELECT(_id = "manage_facility_select",
+                                             _style = "max-width:360px",
+                                             *facility_opts
+                                             ),
+                                      A(T("Go"),
+                                        _href = URL(c="default", f="site",
+                                                    args=[facility_list[0][0]]),
+                                        #_disabled = "disabled",
+                                        _id = "manage_facility_btn",
+                                        _class = "action-btn"
+                                        ),
+                                      _id = "manage_facility_box",
+                                      _class = "menu_box fleft"
+                                      )
+            s3.jquery_ready.append(
 '''$('#manage_facility_select').change(function(){
- $('#manage_facility_btn').attr('href',S3.Ap.concat('/default/site/',$('#manage_facility_select').val()))
-})''')
-            else:
-                manage_facility_box = DIV()
+ $('#manage_facility_btn').attr('href',S3.Ap.concat('/default/site/',$('#manage_facility_select').val()))})
+$('#manage_facility_btn').click(function(){
+if ( ($('#manage_facility_btn').attr('href').toString())===S3.Ap.concat('/default/site/None') )
+{$("#manage_facility_box").append("<div class='alert alert-error'>%s</div>")
+return false}})''' % (T("Please Select a Facility")))
+        else:
+            manage_facility_box = ""
 
         if has_permission("create", table):
-            create = A(T("Add Organization"),
+            create = A(T("Create Organization"),
                        _href = URL(c="org", f="organisation",
                                    args=["create"]),
                        _id = "add-btn",
@@ -260,7 +254,7 @@ def index():
         org_box = ""
 
     # Login/Registration forms
-    self_registration = settings.get_security_self_registration()
+    self_registration = settings.get_security_registration_visible()
     registered = False
     login_form = None
     login_div = None
@@ -272,6 +266,13 @@ def index():
             # This browser has logged-in before
             registered = True
 
+        # Provide a login box on front page
+        auth.messages.submit_button = T("Login")
+        login_form = auth.login(inline=True)
+        login_div = DIV(H3(T("Login")),
+                        P(XML(T("Registered users can %(login)s to access the system") % \
+                              dict(login=B(T("login"))))))
+
         if self_registration:
             # Provide a Registration box on front page
             register_form = auth.register()
@@ -279,13 +280,14 @@ def index():
                                P(XML(T("If you would like to help, then please %(sign_up_now)s") % \
                                         dict(sign_up_now=B(T("sign-up now"))))))
 
-             # Add client-side validation
-            s3base.s3_register_validation()
-
             if request.env.request_method == "POST":
+                if login_form.errors:
+                    hide, show = "#register_form", "#login_form"
+                else:
+                    hide, show = "#login_form", "#register_form"
                 post_script = \
-'''$('#register_form').removeClass('hide')
-$('#login_form').addClass('hide')'''
+'''$('%s').addClass('hide')
+$('%s').removeClass('hide')''' % (hide, show)
             else:
                 post_script = ""
             register_script = \
@@ -301,14 +303,6 @@ $('#login-btn').click(function(){
  $('#login_form').removeClass('hide')
 })''' % post_script
             s3.jquery_ready.append(register_script)
-
-        # Provide a login box on front page
-        request.args = ["login"]
-        auth.messages.submit_button = T("Login")
-        login_form = auth()
-        login_div = DIV(H3(T("Login")),
-                        P(XML(T("Registered users can %(login)s to access the system") % \
-                              dict(login=B(T("login"))))))
 
     if settings.frontpage.rss:
         s3.external_stylesheets.append("http://www.google.com/uds/solutions/dynamicfeed/gfdynamicfeedcontrol.css")
@@ -343,77 +337,86 @@ google.load('feeds','1')
 google.setOnLoadCallback(LoadDynamicFeedControl)'''))
         s3.js_global.append(feed_control)
 
-    return dict(title = title,
-                item = item,
-                sit_dec_res_box = sit_dec_res_box,
-                facility_box = facility_box,
-                manage_facility_box = manage_facility_box,
-                org_box = org_box,
-                r = None, # Required for dataTable to work
-                datatable_ajax_source = datatable_ajax_source,
-                self_registration=self_registration,
-                registered=registered,
-                login_form=login_form,
-                login_div=login_div,
-                register_form=register_form,
-                register_div=register_div
-                )
+    output = dict(title = title,
+                  item = item,
+                  sit_dec_res_box = sit_dec_res_box,
+                  facility_box = facility_box,
+                  manage_facility_box = manage_facility_box,
+                  org_box = org_box,
+                  r = None, # Required for dataTable to work
+                  datatable_ajax_source = datatable_ajax_source,
+                  self_registration=self_registration,
+                  registered=registered,
+                  login_form=login_form,
+                  login_div=login_div,
+                  register_form=register_form,
+                  register_div=register_div
+                  )
 
+    if get_vars.tour:
+        output = s3db.tour_builder(output)
+
+    return output
 # -----------------------------------------------------------------------------
 def organisation():
     """
         Function to handle pagination for the org list on the homepage
     """
 
-    from s3.s3data import S3DataTable
+    representation = request.extension
 
     resource = s3db.resource("org_organisation")
     totalrows = resource.count()
-    table = resource.table
+    display_start = int(get_vars.displayStart) if get_vars.displayStart else 0
+    display_length = int(get_vars.pageLength) if get_vars.pageLength else 10
+    limit = 4 * display_length
 
     list_fields = ["id", "name"]
-    limit = int(request.get_vars["iDisplayLength"]) if request.extension == "aadata" else 1
-    rfields = resource.resolve_selectors(list_fields)[0]
-    (orderby, filter) = S3DataTable.getControlData(rfields, request.vars)
-    resource.add_filter(filter)
-    filteredrows = resource.count()
-    if isinstance(orderby, bool):
-        orderby = table.name
-    rows = resource.select(list_fields,
-                           orderby=orderby,
-                           start=0,
+    default_orderby = orderby = "org_organisation.name asc"
+    if representation == "aadata":
+        query, orderby, left = resource.datatable_filter(list_fields, get_vars)
+        if orderby is None:
+            orderby = default_orderby
+        if query:
+            resource.add_filter(query)
+
+    data = resource.select(list_fields,
+                           start=display_start,
                            limit=limit,
-                           )
-    data = resource.extract(rows,
-                            list_fields,
-                            represent=True,
-                            )
+                           orderby=orderby,
+                           count=True,
+                           represent=True)
+    filteredrows = data["numrows"]
+    rfields = data["rfields"]
+    data = data["rows"]
+
     dt = S3DataTable(rfields, data)
     dt.defaultActionButtons(resource)
     s3.no_formats = True
-    if request.extension == "html":
+
+    if representation == "html":
         items = dt.html(totalrows,
-                        filteredrows,
-                        "org_list_1",
-                        dt_displayLength=10,
+                        totalrows,
+                        "org_dt",
                         dt_ajax_url=URL(c="default",
                                         f="organisation",
                                         extension="aadata",
-                                        vars={"id": "org_list_1"},
+                                        vars={"id": "org_dt"},
                                         ),
-                       )
-    elif request.extension.lower() == "aadata":
-        limit = resource.count()
-        if "sEcho" in request.vars:
-            echo = int(request.vars.sEcho)
-        else:
-            echo = None
+                        dt_pageLength=display_length,
+                        dt_pagination="true",
+                        )
+    elif representation == "aadata":
+        draw = get_vars.get("draw")
+        if draw:
+            draw = int(draw)
         items = dt.json(totalrows,
                         filteredrows,
-                        "org_list_1",
-                        echo)
+                        "org_dt",
+                        draw)
     else:
-        raise HTTP(501, s3mgr.ERROR.BAD_FORMAT)
+        from gluon.http import HTTP
+        raise HTTP(501, ERROR.BAD_FORMAT)
     return items
 
 # -----------------------------------------------------------------------------
@@ -460,7 +463,7 @@ def message():
 def rapid():
     """ Set/remove rapid data entry flag """
 
-    val = request.vars.get("val", True)
+    val = get_vars.get("val", True)
     if val == "0":
         val = False
     else:
@@ -474,31 +477,34 @@ def rapid():
 def user():
     """ Auth functions based on arg. See gluon/tools.py """
 
+    auth_settings = auth.settings
+    utable = auth_settings.table_user
+
     arg = request.args(0)
-    auth.settings.on_failed_authorization = URL(f="error")
+    if arg == "verify_email":
+        # Ensure we use the user's language
+        key = request.args[-1]
+        query = (utable.registration_key == key)
+        user = db(query).select(utable.language,
+                                limitby=(0, 1)).first()
+        if not user:
+            redirect(auth_settings.verify_email_next)
+        session.s3.language = user.language
+
+    auth_settings.on_failed_authorization = URL(f="error")
 
     auth.configure_user_fields()
-    auth.settings.register_onvalidation = register_validation
-
-    _table_user = auth.settings.table_user
-
-    auth.settings.profile_onaccept = auth.s3_user_profile_onaccept
+    auth_settings.profile_onaccept = auth.s3_user_profile_onaccept
+    auth_settings.register_onvalidation = register_validation
 
     self_registration = settings.get_security_self_registration()
     login_form = register_form = None
 
-    if request.args:
-        arg = request.args(0)
-    else:
-        arg = None
-
     # Check for template-specific customisations
-    customize = settings.ui.get("customize_auth_user", None)
-    if customize:
-        customize(arg=arg)
+    customise = settings.customise_auth_user_controller
+    if customise:
+        customise(arg=arg)
 
-    # Needs more work to integrate our form extensions
-    #auth.settings.formstyle = s3_formstyle
     if arg == "login":
         title = response.title = T("Login")
         # @ToDo: move this code to /modules/s3/s3aaa.py:def login()?
@@ -506,17 +512,15 @@ def user():
         form = auth()
         #form = auth.login()
         login_form = form
+
     elif arg == "register":
         title = response.title = T("Register")
         # @ToDo: move this code to /modules/s3/s3aaa.py:def register()?
         if not self_registration:
             session.error = T("Registration not permitted")
             redirect(URL(f="index"))
+        form = register_form = auth.register()
 
-        form = auth.register()
-        register_form = form
-        # Add client-side validation
-        s3base.s3_register_validation()
     elif arg == "change_password":
         title = response.title = T("Change Password")
         form = auth()
@@ -526,33 +530,36 @@ def user():
         else:
             s3.scripts.append("/%s/static/scripts/jquery.pstrength.2.1.0.min.js" % appname)
         s3.jquery_ready.append("$('.password:eq(1)').pstrength()")
+
     elif arg == "retrieve_password":
         title = response.title = T("Retrieve Password")
         form = auth()
+
     elif arg == "profile":
         title = response.title = T("User Profile")
         form = auth.profile()
+
+    elif arg == "options.s3json":
+        # Used when adding organisations from registration form
+        return s3_rest_controller(prefix="auth", resourcename="user")
+
     else:
-        # logout
+        # logout or verify_email
         title = ""
         form = auth()
 
     if form:
         if s3.crud.submit_style:
             form[0][-1][1][0]["_class"] = s3.crud.submit_style
-        elif s3_formstyle == "bootstrap":
-            form[0][-1][1][0]["_class"] = "btn btn-primary"
-
-    # Use Custom Ext views
-    # Best to not use an Ext form for login: can't save username/password in browser & can't hit 'Enter' to submit!
-    #if request.args(0) == "login":
-    #    response.title = T("Login")
-    #    response.view = "auth/login.html"
 
     if settings.get_template() != "default":
         # Try a Custom View
-        view = os.path.join(request.folder, "private", "templates",
-                            settings.get_template(), "views", "user.html")
+        view = os.path.join(request.folder,
+                            settings.get_template_location(),
+                            "templates",
+                            settings.get_template(),
+                            "views",
+                            "user.html")
         if os.path.exists(view):
             try:
                 # Pass view as file not str to work in compiled mode
@@ -578,9 +585,16 @@ def person():
     """
 
     # Set to current user
-    user_person_id  = str(s3_logged_in_person())
-    if not request.args or request.args[0] != user_person_id:
-        request.args = [str(user_person_id)]
+    user_person_id = str(s3_logged_in_person())
+
+    # When request.args = [], set it as user_person_id.
+    # When it is not an ajax request and the first argument is not user_person_id, set it.
+    # If it is an json request, leave the arguments unmodified.
+    if not request.args or (request.args[0] != user_person_id and \
+                            request.args[-1] != "options.s3json" and \
+                            request.args[-1] != "validate.json"
+                            ):
+        request.args = [user_person_id]
 
     set_method = s3db.set_method
 
@@ -600,48 +614,53 @@ def person():
 
         next = URL(c = "default",
                    f = "person",
-                   args = [str(user_person_id), "user"])
+                   args = [user_person_id, "user_profile"])
         onaccept = lambda form: auth.s3_approve_user(form.vars),
+        auth.configure_user_fields()
         form = auth.profile(next = next,
                             onaccept = onaccept)
 
-        return dict(title = T("User Profile"),
+        return dict(title = s3.crud_strings["pr_person"]["title_display"],
                     rheader = rheader,
                     form = form,
                     )
 
     set_method("pr", "person",
-               method="user",
+               method="user_profile",
                action=auth_profile_method)
 
     # Custom Method for Contacts
     set_method("pr", "person",
                method="contacts",
-               action=s3db.pr_contacts)
+               action=s3db.pr_Contacts)
 
     #if settings.has_module("asset"):
     #    # Assets as component of people
-    #    s3db.add_component("asset_asset",
-    #                       pr_person="assigned_to_id")
-
-    # Configure person table for personal mode
-    tablename = "pr_person"
-    table = s3db[tablename]
-
-    s3.crud_strings[tablename].update(
-        title_display = T("Personal Profile"),
-        title_update = T("Personal Profile"))
-
-    # Organisation-dependent Fields
-    set_org_dependent_field = settings.set_org_dependent_field
-    set_org_dependent_field("pr_person_details", "father_name")
-    set_org_dependent_field("pr_person_details", "mother_name")
-    set_org_dependent_field("pr_person_details", "affiliations")
-    set_org_dependent_field("pr_person_details", "company")
+    #    s3db.add_components("pr_person", asset_asset="assigned_to_id")
 
     # CRUD pre-process
     def prep(r):
+        if r.method in ("options", "validate"):
+            return True
         if r.interactive and r.method != "import":
+            # Load default model to override CRUD Strings
+            tablename = "pr_person"
+            table = s3db[tablename]
+
+            # Users can not delete their own person record
+            r.resource.configure(deletable=False)
+
+            s3.crud_strings[tablename].update(
+                title_display = T("Personal Profile"),
+                title_update = T("Personal Profile"))
+
+            # Organisation-dependent Fields
+            set_org_dependent_field = settings.set_org_dependent_field
+            set_org_dependent_field("pr_person_details", "father_name")
+            set_org_dependent_field("pr_person_details", "mother_name")
+            set_org_dependent_field("pr_person_details", "affiliations")
+            set_org_dependent_field("pr_person_details", "company")
+
             if r.component:
                 if r.component_name == "physical_description":
                     # Hide all but those details that we want
@@ -660,47 +679,47 @@ def person():
                     table.other_details.writable = True
                     table.other_details.readable = True
 
-                elif r.component_name == "saved_search":
-                    if r.method == "load":
-                        if r.component_id:
-                            table = db.pr_saved_search
-                            record = db(table.id == r.component_id).select(table.url,
-                                                                           limitby=(0, 1)
-                                                                           ).first()
-                            if record:
-                                redirect(record.url)
-                            else:
-                                raise HTTP(404)
-
                 elif r.component_name == "config":
-                    _config = s3db.gis_config
+                    ctable = s3db.gis_config
                     s3db.gis_config_form_setup()
-                    # Name will be generated from person's name.
-                    #_config.name.readable = _config.name.writable = False
-                    # Hide Location
-                    #_config.region_location_id.readable = _config.region_location_id.writable = False
 
-                    # OpenStreetMap config
-                    s3db.add_component("auth_user_options",
-                                       gis_config=dict(joinby="pe_id",
-                                                       pkey="pe_id",
-                                                       multiple=False)
-                                       )
-                    fields = ["default_location_id",
+                    # Create forms use this
+                    # (update forms are in gis/config())
+                    fields = ["name",
+                              "pe_default",
+                              "default_location_id",
                               "zoom",
                               "lat",
                               "lon",
-                              "projection_id",
-                              "symbology_id",
-                              "wmsbrowser_url",
-                              "wmsbrowser_name",
-                              "user_options.osm_oauth_consumer_key",
-                              "user_options.osm_oauth_consumer_secret",
+                              #"projection_id",
+                              #"symbology_id",
+                              #"wmsbrowser_url",
+                              #"wmsbrowser_name",
                               ]
+                    osm_table = s3db.gis_layer_openstreetmap
+                    openstreetmap = db(osm_table.deleted == False).select(osm_table.id,
+                                                                          limitby=(0, 1))
+                    if openstreetmap:
+                        # OpenStreetMap config
+                        s3db.add_components("gis_config",
+                                            auth_user_options={"joinby": "pe_id",
+                                                               "pkey": "pe_id",
+                                                               "multiple": False,
+                                                              },
+                                           )
+                        fields += ["user_options.osm_oauth_consumer_key",
+                                   "user_options.osm_oauth_consumer_secret",
+                                   ]
                     crud_form = s3base.S3SQLCustomForm(*fields)
-                    s3db.configure("gis_config", crud_form=crud_form)
+                    list_fields = ["name",
+                                   "pe_default",
+                                   ]
+                    s3db.configure("gis_config",
+                                   crud_form=crud_form,
+                                   insertable=False,
+                                   list_fields = list_fields,
+                                   )
             else:
-                table = r.table
                 table.pe_label.readable = False
                 table.pe_label.writable = False
                 table.missing.readable = False
@@ -708,7 +727,10 @@ def person():
                 table.age_group.readable = False
                 table.age_group.writable = False
                 # Assume volunteers only between 12-81
-                table.date_of_birth.widget = S3DateWidget(past=972, future=-144)
+                dob = table.date_of_birth
+                dob.widget = S3CalendarWidget(past_months = 972,
+                                              future_months = -144,
+                                              )
             return True
         else:
             # Disable non-interactive & import
@@ -718,21 +740,15 @@ def person():
     # CRUD post-process
     def postp(r, output):
         if r.interactive and r.component:
-            if r.component_name == "human_resource":
-                # Set the minimum end_date to the same as the start_date
-                s3.jquery_ready.append(
-'''S3.start_end_date('hrm_human_resource_start_date','hrm_human_resource_end_date')''')
-            if r.component_name == "experience":
-                # Set the minimum end_date to the same as the start_date
-                s3.jquery_ready.append(
-'''S3.start_end_date('hrm_experience_start_date','hrm_experience_end_date')''')
-            elif r.component_name == "saved_search" and r.method in (None, "search"):
-                s3_action_buttons(r)
-                s3.actions.append(
-                    dict(url=URL(args=r.args + ["[id]", "load"]),
-                         label=str(T("Load")),
-                         _class="action-btn")
-                )
+            if r.component_name == "config":
+                update_url = URL(c="gis", f="config",
+                                 args="[id]")
+                s3_action_buttons(r, update_url=update_url)
+                s3.actions.append(dict(url=URL(c="gis", f="index",
+                                               vars={"config":"[id]"}),
+                                       label=str(T("Show")),
+                                       _class="action-btn",
+                                       ))
             elif r.component_name == "asset":
                 # Provide a link to assign a new Asset
                 # @ToDo: Proper Widget to do this inline
@@ -742,6 +758,11 @@ def person():
                                       _class="action-btn")
         return output
     s3.postp = postp
+
+    if settings.get_hrm_record_tab():
+        hr_tab = (T("Staff/Volunteer Record"), "human_resource")
+    else:
+        hr_tab = None
 
     if settings.get_hrm_staff_experience() == "experience":
         experience_tab = (T("Experience"), "experience")
@@ -763,6 +784,11 @@ def person():
     else:
         description_tab = None
 
+    if settings.get_pr_use_address():
+        address_tab = (T("Address"), "address")
+    else:
+        address_tab = None
+
     if settings.get_hrm_use_education():
         education_tab = (T("Education"), "education")
     else:
@@ -778,8 +804,9 @@ def person():
     else:
         skills_tab = None
 
-    if settings.get_hrm_use_teams():
-        teams_tab = (T("Teams"), "group_membership")
+    teams = settings.get_hrm_teams()
+    if teams:
+        teams_tab = (T(teams), "group_membership")
     else:
         teams_tab = None
 
@@ -788,18 +815,19 @@ def person():
     else:
         trainings_tab = None
 
-    if settings.get_save_search_widget():
-        searches_tab = (T("Saved Searches"), "saved_search")
+    setting = settings.get_pr_contacts_tabs()
+    if setting:
+        contacts_tab = (T("Contacts"), "contacts")
     else:
-        searches_tab = None
+        contacts_tab = None
 
     tabs = [(T("Person Details"), None),
-            (T("User Account"), "user"),
-            (T("Staff/Volunteer Record"), "human_resource"),
+            (T("User Account"), "user_profile"),
+            hr_tab,
             id_tab,
             description_tab,
-            (T("Address"), "address"),
-            (T("Contacts"), "contacts"),
+            address_tab,
+            contacts_tab,
             education_tab,
             trainings_tab,
             certificates_tab,
@@ -808,24 +836,72 @@ def person():
             experience_tab,
             teams_tab,
             #(T("Assets"), "asset"),
-            (T("Map Options"), "config"),
-            searches_tab,
+            #(T("My Subscriptions"), "subscription"),
+            (T("My Maps"), "config"),
             ]
-    
+
     output = s3_rest_controller("pr", "person",
-                                rheader = lambda r: \
-                                    s3db.pr_rheader(r, tabs=tabs))
+                                rheader = lambda r, tabs=tabs: \
+                                          s3db.pr_rheader(r, tabs=tabs))
+    return output
+
+# -----------------------------------------------------------------------------
+def group():
+    """
+        RESTful CRUD controller
+        - needed when group add form embedded in default/person
+        - only create method is allowed, when opened in a inline form.
+    """
+
+    # Check if it is called from a inline form
+    if auth.permission.format != "popup":
+        return ""
+
+    # Pre-process
+    def prep(r):
+        if r.method != "create":
+            return False
+        return True
+    s3.prep = prep
+
+    output = s3_rest_controller("pr", "group")
+
+    return output
+
+# -----------------------------------------------------------------------------
+def skill():
+    """
+        RESTful CRUD controller
+        - needed when skill add form embedded in default/person
+        - only create method is allowed, when opened in a inline form.
+    """
+
+    # Check if it is called from a inline form
+    if auth.permission.format != "popup":
+        return ""
+
+    # Pre-process
+    def prep(r):
+        if r.method != "create":
+            return False
+        return True
+    s3.prep = prep
+
+    output = s3_rest_controller("hrm", "skill")
+
     return output
 
 # -----------------------------------------------------------------------------
 def facebook():
     """ Login using Facebook """
 
-    if not auth.settings.facebook:
-        redirect(URL(f="user", args=request.args, vars=request.vars))
+    channel = s3db.msg_facebook_login()
+
+    if not channel:
+        redirect(URL(f="user", args=request.args, vars=get_vars))
 
     from s3oauth import FaceBookAccount
-    auth.settings.login_form = FaceBookAccount()
+    auth.settings.login_form = FaceBookAccount(channel)
     form = auth()
 
     return dict(form=form)
@@ -834,11 +910,13 @@ def facebook():
 def google():
     """ Login using Google """
 
-    if not auth.settings.google:
-        redirect(URL(f="user", args=request.args, vars=request.vars))
+    channel = settings.get_auth_google()
+
+    if not channel:
+        redirect(URL(f="user", args=request.args, vars=get_vars))
 
     from s3oauth import GooglePlusAccount
-    auth.settings.login_form = GooglePlusAccount()
+    auth.settings.login_form = GooglePlusAccount(channel)
     form = auth()
 
     return dict(form=form)
@@ -860,11 +938,14 @@ def about():
         versions available to this instance of Sahana Eden.
     """
 
-    response.title = T("About")
     if settings.get_template() != "default":
         # Try a Custom View
-        view = os.path.join(request.folder, "private", "templates",
-                            settings.get_template(), "views", "about.html")
+        view = os.path.join(request.folder,
+                            settings.get_template_location(),
+                            "templates",
+                            settings.get_template(),
+                            "views",
+                            "about.html")
         if os.path.exists(view):
             try:
                 # Pass view as file not str to work in compiled mode
@@ -873,27 +954,75 @@ def about():
                 from gluon.http import HTTP
                 raise HTTP("404", "Unable to open Custom View: %s" % view)
 
-    import sys
-    import subprocess
-    import string
+    # Allow editing of page content from browser using CMS module
+    if settings.has_module("cms"):
+        ADMIN = auth.get_system_roles().ADMIN in session.s3.roles
+        table = s3db.cms_post
+        ltable = s3db.cms_post_module
+        module = "default"
+        resource = "about"
+        query = (ltable.module == module) & \
+                ((ltable.resource == None) | \
+                 (ltable.resource == resource)) & \
+                (ltable.post_id == table.id) & \
+                (table.deleted != True)
+        item = db(query).select(table.id,
+                                table.body,
+                                limitby=(0, 1)).first()
 
-    python_version = sys.version
-    web2py_version = open(apath("../VERSION"), "r").read()[8:]
+        get_vars = {"module": module, "resource": resource}
+
+        if item:
+            if ADMIN:
+                item = DIV(XML(item.body),
+                           BR(),
+                           A(T("Edit"),
+                             _href=URL(c="cms", f="post",
+                                       args=[item.id, "update"],
+                                       vars=get_vars,
+                                       ),
+                             _class="action-btn"))
+            else:
+                item = DIV(XML(item.body))
+        elif ADMIN:
+            if s3.crud.formstyle == "bootstrap":
+                _class = "btn"
+            else:
+                _class = "action-btn"
+            item = A(T("Edit"),
+                     _href=URL(c="cms", f="post",
+                               args="create",
+                               vars=get_vars,
+                               ),
+                     _class="%s cms-edit" % _class)
+        else:
+            item = H2(T("About"))
+    else:
+        item = H2(T("About"))
+
+    # Technical Support Details
+    import platform
+    import string
+    import subprocess
+
     sahana_version = open(os.path.join(request.folder, "VERSION"), "r").read()
+    web2py_version = open(apath("../VERSION"), "r").read()[8:]
+    python_version = platform.python_version()
+    os_version = platform.platform()
+
     # Database
-    sqlite_version = None
-    mysql_version = None
-    mysqldb_version = None
-    pgsql_version = None
-    psycopg_version = None
-    if db_string[0].find("sqlite") != -1:
+    if db_string.find("sqlite") != -1:
         try:
             import sqlite3
             sqlite_version = sqlite3.version
         except:
             sqlite_version = T("Unknown")
-    elif db_string[0].find("mysql") != -1:
+        database = TR(TD("SQLite"),
+                      TD(sqlite_version))
+
+    elif db_string.find("mysql") != -1:
         try:
+            # @ToDo: Support using pymysql & Warn
             import MySQLdb
             mysqldb_version = MySQLdb.__revision__
         except:
@@ -910,9 +1039,17 @@ def about():
             cur = con.cursor()
             cur.execute("SELECT VERSION()")
             mysql_version = cur.fetchone()
+
+        database = TAG[""](TR(TD("MySQL"),
+                              TD(mysql_version)),
+                           TR(TD("MySQLdb python driver"),
+                              TD(mysqldb_version)),
+                           )
+
     else:
         # Postgres
         try:
+            # @ToDo: Support using pg8000 & Warn
             import psycopg2
             psycopg_version = psycopg2.__version__
         except:
@@ -931,38 +1068,116 @@ def about():
             cur.execute("SELECT version()")
             pgsql_version = cur.fetchone()
 
+        database = TAG[""](TR(TD("PostgreSQL"),
+                              TD(pgsql_version)),
+                              TR(TD("psycopg2 python driver"),
+                                 TD(psycopg_version)),
+                              )
+
     # Libraries
+    try:
+        from lxml import etree
+        lxml_version = ".".join([str(i) for i in etree.LXML_VERSION])
+    except:
+        lxml_version = T("Not installed or incorrectly configured.")
     try:
         import reportlab
         reportlab_version = reportlab.Version
     except:
         reportlab_version = T("Not installed or incorrectly configured.")
     try:
+        import shapely
+        shapely_version = shapely.__version__
+    except:
+        shapely_version = T("Not installed or incorrectly configured.")
+    try:
+        import xlrd
+        xlrd_version = xlrd.__VERSION__
+    except:
+        xlrd_version = T("Not installed or incorrectly configured.")
+    try:
         import xlwt
         xlwt_version = xlwt.__VERSION__
     except:
         xlwt_version = T("Not installed or incorrectly configured.")
-    return dict(
-                python_version=python_version,
-                sahana_version=sahana_version,
-                web2py_version=web2py_version,
-                sqlite_version=sqlite_version,
-                mysql_version=mysql_version,
-                mysqldb_version=mysqldb_version,
-                pgsql_version=pgsql_version,
-                psycopg_version=psycopg_version,
-                reportlab_version=reportlab_version,
-                xlwt_version=xlwt_version
+
+    details = DIV(TABLE(THEAD(),
+                        TBODY(TR(TD(STRONG(T("Configuration"))),
+                                 TD(),
+                                 _class="odd",
+                                 ),
+                              TR(TD(T("Public URL")),
+                                 TD(settings.get_base_public_url()),
+                                 ),
+                              TR(TD(STRONG(T("Core Components"))),
+                                 TD(STRONG(T("Version"))),
+                                 _class="odd",
+                                 ),
+                              TR(TD(settings.get_system_name_short()),
+                                 TD(sahana_version),
+                                 ),
+                              TR(TD(T("Web Server")),
+                                 TD(request.env.server_software),
+                                 _class="odd",
+                                 ),
+                              TR(TD("Web2Py"),
+                                 TD(web2py_version),
+                                 ),
+                              TR(TD("Python"),
+                                 TD(python_version),
+                                 _class="odd",
+                                 ),
+                              TR(TD("Operating System"),
+                                 TD(os_version),
+                                 ),
+                              TR(TD(STRONG(T("Database"))),
+                                 TD(),
+                                 _class="odd",
+                                 ),
+                              database,
+                              TR(TD(STRONG(T("Other Components"))),
+                                 TD(),
+                                 _class="odd",
+                                 ),
+                              TR(TD("lxml"),
+                                 TD(lxml_version),
+                                 ),
+                              TR(TD("ReportLab"),
+                                 TD(reportlab_version),
+                                 _class="odd",
+                                 ),
+                              TR(TD("Shapely"),
+                                 TD(shapely_version),
+                                 ),
+                              TR(TD("xlrd"),
+                                 TD(xlrd_version),
+                                 _class="odd",
+                                 ),
+                              TR(TD("xlwt"),
+                                 TD(xlwt_version),
+                                 ),
+                        _class="dataTable display"),
+                  _class="table-container")
+                  )
+
+    response.title = T("About")
+
+    return dict(details = details,
+                item = item,
                 )
 
 # -----------------------------------------------------------------------------
 def help():
-    """ Custom View """
+    """ CMS page or Custom View """
 
     if settings.get_template() != "default":
         # Try a Custom View
-        view = os.path.join(request.folder, "private", "templates",
-                            settings.get_template(), "views", "help.html")
+        view = os.path.join(request.folder,
+                            settings.get_template_location(),
+                            "templates",
+                            settings.get_template(),
+                            "views",
+                            "help.html")
         if os.path.exists(view):
             try:
                 # Pass view as file not str to work in compiled mode
@@ -971,8 +1186,63 @@ def help():
                 from gluon.http import HTTP
                 raise HTTP("404", "Unable to open Custom View: %s" % view)
 
+    # Allow editing of page content from browser using CMS module
+    if settings.has_module("cms"):
+        ADMIN = auth.get_system_roles().ADMIN in session.s3.roles
+        table = s3db.cms_post
+        ltable = s3db.cms_post_module
+        module = "default"
+        resource = "help"
+        query = (ltable.module == module) & \
+                ((ltable.resource == None) | \
+                 (ltable.resource == resource)) & \
+                (ltable.post_id == table.id) & \
+                (table.deleted != True)
+        item = db(query).select(table.id,
+                                table.body,
+                                limitby=(0, 1)).first()
+
+        get_vars = {"module": module, "resource": resource}
+
+        if item:
+            if ADMIN:
+                item = DIV(XML(item.body),
+                           BR(),
+                           A(T("Edit"),
+                             _href=URL(c="cms", f="post",
+                                       args=[item.id, "update"],
+                                       vars=get_vars,
+                                       ),
+                             _class="action-btn"))
+            else:
+                item = DIV(XML(item.body))
+        elif ADMIN:
+            if s3.crud.formstyle == "bootstrap":
+                _class = "btn"
+            else:
+                _class = "action-btn"
+            item = A(T("Edit"),
+                     _href=URL(c="cms", f="post",
+                               args="create",
+                               vars=get_vars,
+                               ),
+                     _class="%s cms-edit" % _class)
+        else:
+            item = TAG[""](H2(T("Help")),
+                           A(T("User & Administration Guide"),
+                            _href="http://eden.sahanafoundation.org/wiki/UserGuidelines",
+                            _target="_blank"),
+                           " - online version")
+    else:
+        item = TAG[""](H2(T("Help")),
+                       A(T("User & Administration Guide"),
+                         _href="http://eden.sahanafoundation.org/wiki/UserGuidelines",
+                         _target="_blank"),
+                         " - online version")
+
     response.title = T("Help")
-    return dict()
+
+    return dict(item=item)
 
 # -----------------------------------------------------------------------------
 def privacy():
@@ -980,8 +1250,12 @@ def privacy():
 
     if settings.get_template() != "default":
         # Try a Custom View
-        view = os.path.join(request.folder, "private", "templates",
-                            settings.get_template(), "views", "privacy.html")
+        view = os.path.join(request.folder,
+                            settings.get_template_location(),
+                            "templates",
+                            settings.get_template(),
+                            "views",
+                            "privacy.html")
         if os.path.exists(view):
             try:
                 # Pass view as file not str to work in compiled mode
@@ -999,8 +1273,12 @@ def tos():
 
     if settings.get_template() != "default":
         # Try a Custom View
-        view = os.path.join(request.folder, "private", "templates",
-                            settings.get_template(), "views", "tos.html")
+        view = os.path.join(request.folder,
+                            settings.get_template_location(),
+                            "templates",
+                            settings.get_template(),
+                            "views",
+                            "tos.html")
         if os.path.exists(view):
             try:
                 # Pass view as file not str to work in compiled mode
@@ -1010,6 +1288,29 @@ def tos():
                 raise HTTP("404", "Unable to open Custom View: %s" % view)
 
     response.title = T("Terms of Service")
+    return dict()
+
+# -----------------------------------------------------------------------------
+def video():
+    """ Custom View """
+
+    if settings.get_template() != "default":
+        # Try a Custom View
+        view = os.path.join(request.folder,
+                            settings.get_template_location(),
+                            "templates",
+                            settings.get_template(),
+                            "views",
+                            "video.html")
+        if os.path.exists(view):
+            try:
+                # Pass view as file not str to work in compiled mode
+                response.view = open(view, "rb")
+            except IOError:
+                from gluon.http import HTTP
+                raise HTTP("404", "Unable to open Custom View: %s" % view)
+
+    response.title = T("Video Tutorials")
     return dict()
 
 # -----------------------------------------------------------------------------
@@ -1049,33 +1350,102 @@ def contact():
         output = s3_rest_controller(prefix, resourcename)
         return output
 
-    else:
-        template = settings.get_template()
-        if template != "default":
-            # Try a Custom Page
-            controller = "applications.%s.private.templates.%s.controllers" % \
-                                (appname, template)
+    template = settings.get_template()
+    if template != "default":
+        # Try a Custom Controller
+        location = settings.get_template_location()
+        package = "applications.%s.%s.templates.%s" % \
+                    (appname, location, template)
+        name = "controllers"
+        try:
+            custom = getattr(__import__(package, fromlist=[name]), name)
+        except (ImportError, AttributeError):
+            # No Custom Page available, try a custom view
+            pass
+        else:
+            if hasattr(custom, "contact"):
+                controller = getattr(custom, "contact")()
+                return controller()
+
+        # Try a Custom View
+        view = os.path.join(request.folder,
+                            location,
+                            "templates",
+                            template,
+                            "views",
+                            "contact.html")
+        if os.path.exists(view):
             try:
-                exec("import %s as custom" % controller) in globals(), locals()
-            except ImportError, e:
-                # No Custom Page available, try a custom view
-                pass
-            else:
-                if "contact" in custom.__dict__:
-                    output = custom.contact()()
-                    return output
+                # Pass view as file not str to work in compiled mode
+                response.view = open(view, "rb")
+            except IOError:
+                from gluon.http import HTTP
+                raise HTTP("404", "Unable to open Custom View: %s" % view)
 
-            view = os.path.join(request.folder, "private", "templates",
-                                template, "views", "contact.html")
-            if os.path.exists(view):
-                try:
-                    # Pass view as file not str to work in compiled mode
-                    response.view = open(view, "rb")
-                except IOError:
-                    from gluon.http import HTTP
-                    raise HTTP("404", "Unable to open Custom View: %s" % view)
+            response.title = T("Contact us")
+            return dict()
 
-                response.title = T("Contact us")
+    if settings.has_module("cms"):
+        # Use CMS
+        return s3db.cms_index("default", "contact", page_name=T("Contact Us"))
+
+    # Just use default HTML View
     return dict()
+
+# -----------------------------------------------------------------------------
+def load_all_models():
+    """
+        Controller to load all models in web browser
+        - to make it easy to debug in Eclipse
+    """
+
+    s3db.load_all_models()
+    return "ok"
+
+# -----------------------------------------------------------------------------
+def audit():
+    """
+        RESTful CRUD Controller for Audit Logs
+        - used e.g. for Site Activity
+    """
+
+    return s3_rest_controller("s3", "audit")
+
+# -----------------------------------------------------------------------------
+def get_settings():
+    """
+       Function to respond to get requests. Requires admin permissions
+    """
+
+    # Check if the request has a valid authorization header with admin cred.
+    if not auth.s3_has_role("ADMIN"):
+        auth.permission.format = None
+        auth.permission.fail()
+
+    elif not settings.get_base_allow_testing():
+        raise(HTTP("405", "Testing not allowed"))
+
+    else:
+        arg = request.args(0)
+
+        # Ex. request /get_settings/deployment_settings/template
+        if arg == "deployment_settings":
+            asked = request.args[1:]
+            return_settings = {}
+
+            for setting in asked:
+                func_name = "get_%s" % setting
+                function = getattr(settings, func_name)
+                # Ex. value of function - settings.get_template()
+                try:
+                    value = function()
+                except TypeError:
+                    continue
+
+                return_settings[setting] = value
+
+            return response.json(return_settings)
+
+        raise(HTTP("400", "Invalid/Missing argument"))
 
 # END =========================================================================

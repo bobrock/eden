@@ -14,9 +14,7 @@ if not settings.has_module(module):
 def index():
     """ Module's Home Page """
 
-    module_name = settings.modules[module].name_nice
-    response.title = module_name
-    return dict(module_name=module_name)
+    s3_redirect_default(URL(f="alert"))
 
 # -----------------------------------------------------------------------------
 def info_prep(r):
@@ -25,17 +23,20 @@ def info_prep(r):
         - whether accessed via /eden/info or /eden/alert/x/info
     """
 
-    s3.scripts.append("/%s/static/scripts/S3/s3.cap.js" % appname)
+    if s3.debug:
+        s3.scripts.append("/%s/static/scripts/S3/s3.cap.js" % appname)
+    else:
+        s3.scripts.append("/%s/static/scripts/S3/s3.cap.min.js" % appname)
     s3.stylesheets.append("S3/cap.css")
 
     table = db.cap_info
     if r.representation == "html":
         if r.component:
-            if r.component_name == "cap_info":
+            if r.component_name == "info":
                 info_fields_comments()
-            elif r.component_name == "cap_area":
+            elif r.component_name == "area":
                 area_fields_comments()
-            elif r.component_name == "cap_resource":
+            elif r.component_name == "resource":
                 resource_fields_comments()
         elif r.tablename == "cap_info":
             info_fields_comments()
@@ -43,27 +44,33 @@ def info_prep(r):
         item = r.record
         if item and r.tablename == "cap_info" and \
            s3db.cap_alert_is_template(item.alert_id):
-            for f in ["urgency", "certainty",
-                      "effective", "onset", "expires",
-                      "priority", "severity"]:
+            for f in ("urgency",
+                      "certainty",
+                      "effective",
+                      "onset",
+                      "expires",
+                      "priority",
+                      "severity"
+                      ):
                 field = table[f]
                 field.writable = False
                 field.readable = False
                 field.required = False
-            for f in ["category", "event"]:
-                table[f].required = False
+            table.category.required = False
 
     post_vars = request.post_vars
     template_id = None
     if post_vars.get("language", False):
         if r.tablename == "cap_info":
+            # cap/info controller
             try:
                 template_id = db(table.id == r.id).select(table.template_info_id,
                                                           limitby=(0, 1)
                                                           ).first().template_info_id
             except AttributeError, KeyError:
                 pass
-        elif r.component and r.component.tablename == "cap_info":
+        elif r.component_name == "info":
+            # cap/x/info component tab
             try:
                 template_id = r.component.get_id()
                 # this will error out if component is not yet saved
@@ -78,60 +85,518 @@ def info_prep(r):
             locked_fields = [lf for lf in settings["locked"] if settings["locked"]]
             for lf in locked_fields:
                 post_vars[lf] = template[lf]
+
     return True
 
 # -----------------------------------------------------------------------------
+def public():
+    """
+        Filtered version of the Alerts controller
+    """
+
+    s3.filter = (s3base.FS("scope") == "Public")
+
+    return alert()
+
+# -----------------------------------------------------------------------------
 def alert():
-    """ REST controller for CAP alerts """
+    """ REST controller for CAP Alerts and Components """
+
+    tablename = "cap_alert"
 
     def prep(r):
-        if r.id and s3db.cap_alert_is_template(r.id):
-            redirect(URL(c="cap", f="template",
-                         args=request.args,
-                         vars=request.vars))
+        
+        if r.representation == "dl":
+            # DataList: match list_layout
+            list_fields = ["info.headline",
+                           "area.name",
+                           "info.priority",
+                           "status",
+                           "scope",
+                           "info.event_type_id",
+                           ]
+
+            s3db.configure(tablename,
+                           list_fields = list_fields,
+                           )
+
+        elif r.representation == "json":
+            # @ToDo: fix JSON representation's ability to use component list_fields
+            list_fields = ["info.headline",
+                           "area.name",
+                           "info.priority",
+                           "status",
+                           "scope",
+                           "info.event_type_id",
+                           ]
+            
+            s3db.configure(tablename, 
+                           list_fields = list_fields,
+                           )
+
+        #elif r.representation == "cap":
+        #    # This is either importing from or exporting to cap format. Set both
+        #    # postprocessing hooks so we don't have to enumerate methods.
+        #    s3db.configure("gis_location",
+        #                   xml_post_parse = s3db.cap_gis_location_xml_post_parse,
+        #                   xml_post_render = s3db.cap_gis_location_xml_post_render,
+        #                   )
+
+        if r.id:
+            if r.record.is_template:
+                redirect(URL(c="cap", f="template",
+                             args = request.args,
+                             vars = request.vars))
+        else:
+            r.resource.add_filter(r.table.is_template == False)
+            s3.formats["cap"] = r.url() # .have added by JS
 
         if r.interactive:
             alert_fields_comments()
 
-        post_vars = request.post_vars
-        if post_vars.get("edit_info", False):
-            tid = post_vars["template_id"]
-            if tid:
-                # Read template and copy locked fields to post_vars
-                table = db.cap_alert
-                template = db(table.id == tid).select(limitby=(0, 1)).first()
-                try:
-                    tsettings = json.loads(template.template_settings)
-                except ValueError:
-                    tsettings = dict()
-                if isinstance(tsettings.get("locked", False), dict):
-                    locked_fields = [lf for lf in tsettings["locked"] if tsettings["locked"]]
-                    for lf in locked_fields:
-                        post_vars[lf] = template[lf]
+            if not r.component:
+                if r.method == "profile":
+                    # Provide a nice display of the Alert details
+
+                    # Hide the side menu
+                    current.menu.options = None
+
+                    # Header
+                    record = r.record
+                    profile_header = DIV(SPAN(SPAN("%s :: " % T("Message ID"),
+                                                   _class="cap-label upper"
+                                                   ),
+                                              SPAN(record.identifier,
+                                                   _class="cap-strong"
+                                                   ),
+                                              _class="medium-6 columns",
+                                              ),
+                                         SPAN(SPAN("%s :: " % T("Source"),
+                                                   _class="cap-label upper"
+                                                   ),
+                                              SPAN(record.source,
+                                                   _class="cap-strong"
+                                                   ),
+                                              _class="medium-6 columns",
+                                              ),
+                                         _class="row"
+                                         )
+
+                    # Read the Components
+                    alert_id = record.id
+
+                    # Info
+                    # @ToDo: handle multiple languages
+                    itable = s3db.cap_info
+                    info = db(itable.alert_id == alert_id).select(itable.language,
+                                                                  itable.category,
+                                                                  itable.event_type_id,
+                                                                  itable.response_type,
+                                                                  itable.urgency,
+                                                                  itable.severity,
+                                                                  itable.certainty,
+                                                                  itable.audience,
+                                                                  itable.effective,
+                                                                  itable.onset,
+                                                                  itable.expires,
+                                                                  itable.sender_name,
+                                                                  itable.headline,
+                                                                  itable.description,
+                                                                  itable.instruction,
+                                                                  itable.contact,
+                                                                  itable.web,
+                                                                  itable.parameter,
+                                                                  limitby=(0, 1)
+                                                                  ).first()
+
+                    # Area
+                    # @ToDo: handle multiple areas
+                    atable = s3db.cap_area
+                    area = db(atable.alert_id == alert_id).select(atable.name,
+                                                                  limitby=(0, 1)).first()
+
+                    # Map
+                    ftable = s3db.gis_layer_feature
+                    if auth.s3_logged_in():
+                        fn = "alert"
+                    else:
+                        fn = "public"
+                    query = (ftable.controller == "cap") & \
+                            (ftable.function == fn)
+                    layer = db(query).select(ftable.layer_id,
+                                             limitby=(0, 1)
+                                             ).first()
+                    try:
+                        layer = dict(active = True,
+                                     layer_id = layer.layer_id,
+                                     filter = "~.id=%s" % alert_id,
+                                     name = record.identifier,
+                                     id = "profile-header-%s-%s" % (tablename, alert_id),
+                                     )
+                    except:
+                        # No suitable prepop found
+                        layer = None
+
+                    # Location
+                    # @ToDo: Support multiple Locations
+                    gtable = db.gis_location
+                    ltable = db.cap_area_location
+                    query = (ltable.alert_id == alert_id) & \
+                            (ltable.location_id == gtable.id)
+                    location = db(query).select(gtable.lat_max,
+                                                gtable.lon_max,
+                                                gtable.lat_min,
+                                                gtable.lon_min,
+                                                limitby=(0, 1)).first()
+                    if location:
+                        bbox = {"lat_max" : location.lat_max,
+                                "lon_max" : location.lon_max,
+                                "lat_min" : location.lat_min,
+                                "lon_min" : location.lon_min
+                                }
+                    else:
+                        # Default bounds
+                        bbox = {}
+
+                    label = TAG[""](SPAN("%s :: " % T("Area"),
+                                         _class="cap-label upper"
+                                         ),
+                                    SPAN(area.name,
+                                         _class="cap-value"
+                                         ),
+                                    )
+                    map_widget = dict(label = label,
+                                      type = "map",
+                                      #context = "alert",
+                                      icon = "icon-map",
+                                      #height = 383,
+                                      #width = 568,
+                                      bbox = bbox,
+                                      )
+
+                    table = r.table
+
+                    def custom_widget_fn_1(r, **attr):
+                        return DIV(DIV(SPAN("%s :: " % T("Headline"),
+                                            _class="cap-label upper"
+                                            ),
+                                       SPAN(info.headline,
+                                            _class="cap-value"
+                                            ),
+                                       ),
+                                   DIV(" "),
+                                   DIV(SPAN("%s :: " % T("Description"),
+                                            _class="cap-label upper"
+                                            ),
+                                       SPAN(info.description,
+                                            _class="cap-value"
+                                            ),
+                                       ),
+                                   DIV(SPAN("%s :: " % T("Response Type"),
+                                            _class="cap-label upper"
+                                            ),
+                                       SPAN(info.response_type,
+                                            _class="cap-strong"
+                                            ),
+                                       ),
+                                   DIV(SPAN("%s :: " % T("Instructions"),
+                                            _class="cap-label upper"
+                                            ),
+                                       SPAN(info.instruction,
+                                            _class="cap-value"
+                                            ),
+                                       ),
+                                   )
+
+                    custom_widget_1 = dict(type = "custom",
+                                           fn = custom_widget_fn_1,
+                                           )
+
+                    def custom_widget_fn_2(r, **attr):
+                        return DIV(DIV(SPAN("%s " % T("Information"),
+                                            _class="cap-value upper"
+                                            ),
+                                       SPAN("%s :: " % T("Event"),
+                                            _class="cap-label upper"
+                                            ),
+                                       SPAN(itable.event_type_id.represent(info.event_type_id),
+                                            _class="cap-strong"
+                                            ),
+                                       ),
+                                   DIV(_class="cap-label underline"
+                                       ),
+                                   DIV(SPAN("%s :: " % T("Language"),
+                                            _class="cap-label"
+                                            ),
+                                       SPAN(itable.language.represent(info.language),
+                                            _class="cap-value"
+                                            ),
+                                       ),
+                                   DIV(SPAN("%s :: " % T("Category"),
+                                            _class="cap-label"
+                                            ),
+                                       SPAN(itable.category.represent(info.category),
+                                            _class="cap-value"
+                                            ),
+                                       ),
+                                   DIV(SPAN("%s :: " % T("Urgency"),
+                                            _class="cap-label"
+                                            ),
+                                       SPAN(itable.urgency.represent(info.urgency),
+                                            _class="cap-value"
+                                            ),
+                                       ),
+                                   DIV(SPAN("%s :: " % T("Severity"),
+                                            _class="cap-label"
+                                            ),
+                                       SPAN(itable.severity.represent(info.severity),
+                                            _class="cap-value"
+                                            ),
+                                       ),
+                                   DIV(SPAN("%s :: " % T("Certainty"),
+                                            _class="cap-label"
+                                            ),
+                                       SPAN(itable.certainty.represent(info.certainty),
+                                            _class="cap-value"
+                                            ),
+                                       ),
+                                   DIV(SPAN("%s :: " % T("Audience"),
+                                            _class="cap-label"
+                                            ),
+                                       SPAN(info.audience,
+                                            _class="cap-value"
+                                            ),
+                                       ),
+                                   DIV(SPAN("%s :: " % T("Effective Date"),
+                                            _class="cap-label"
+                                            ),
+                                       SPAN(itable.effective.represent(info.effective),
+                                            _class="cap-value"
+                                            ),
+                                       ),
+                                   DIV(SPAN("%s :: " % T("Onset Date"),
+                                            _class="cap-label"
+                                            ),
+                                       SPAN(itable.onset.represent(info.onset),
+                                            _class="cap-value"
+                                            ),
+                                       ),
+                                   DIV(SPAN("%s :: " % T("Expiry Date"),
+                                            _class="cap-label"
+                                            ),
+                                       SPAN(itable.expires.represent(info.expires),
+                                            _class="cap-value"
+                                            ),
+                                       ),
+                                   DIV(SPAN("%s :: " % T("Sender"),
+                                            _class="cap-label"
+                                            ),
+                                       SPAN(info.sender_name,
+                                            _class="cap-value"
+                                            ),
+                                       ),
+                                   DIV(SPAN("%s :: " % T("Information URL"),
+                                            _class="cap-label"
+                                            ),
+                                       SPAN(info.web,
+                                            _class="cap-value"
+                                            ),
+                                       ),
+                                   DIV(SPAN("%s :: " % T("Contact Info"),
+                                            _class="cap-label"
+                                            ),
+                                       SPAN(info.contact,
+                                            _class="cap-value"
+                                            ),
+                                       ),
+                                   DIV(SPAN("%s :: " % T("Parameters"),
+                                            _class="cap-label"
+                                            ),
+                                       SPAN(itable.parameter.represent(info.parameter),
+                                            _class="cap-value"
+                                            ),
+                                       ),
+                                   )
+
+                    custom_widget_2 = dict(type = "custom",
+                                           fn = custom_widget_fn_2,
+                                           )
+
+                    def custom_widget_fn_3(r, **attr):
+                        return DIV(DIV(SPAN(T("Alert Qualifiers"),
+                                            _class="cap-value upper"
+                                            ),
+                                       ),
+                                   DIV(_class="underline"
+                                       ),
+                                   DIV(SPAN("%s :: " % T("Sender ID"),
+                                            _class="cap-label"
+                                            ),
+                                       SPAN(record.sender,
+                                            _class="cap-value"
+                                            ),
+                                       ),
+                                   DIV(SPAN("%s :: " % T("Sent Date/Time"),
+                                            _class="cap-label"
+                                            ),
+                                       SPAN(table.sent.represent(record.sent),
+                                            _class="cap-value"
+                                            ),
+                                       ),
+                                   DIV(SPAN("%s :: " % T("Message Status"),
+                                            _class="cap-label"
+                                            ),
+                                       SPAN(table.status.represent(record.status),
+                                            _class="cap-value"
+                                            ),
+                                       ),
+                                   DIV(SPAN("%s :: " % T("Message Type"),
+                                            _class="cap-label"
+                                            ),
+                                       SPAN(table.msg_type.represent(record.msg_type),
+                                            _class="cap-value"
+                                            ),
+                                       ),
+                                   DIV(SPAN("%s :: " % T("Scope"),
+                                            _class="cap-label"
+                                            ),
+                                       SPAN(table.scope.represent(record.scope),
+                                            _class="cap-value"
+                                            ),
+                                       ),
+                                   DIV(SPAN("%s :: " % T("Handling Code"),
+                                            _class="cap-label"
+                                            ),
+                                       SPAN(table.codes.represent(record.codes),
+                                            _class="cap-value"
+                                            ),
+                                       ),
+                                   DIV(SPAN("%s :: " % T("Note"),
+                                            _class="cap-label"
+                                            ),
+                                       SPAN(record.note,
+                                            _class="cap-value"
+                                            ),
+                                       ),
+                                   DIV(SPAN("%s :: " % T("Reference ID"),
+                                            _class="cap-label"
+                                            ),
+                                       SPAN(table.reference.represent(record.reference),
+                                            _class="cap-value"
+                                            ),
+                                       ),
+                                   DIV(SPAN("%s :: " % T("Incident IDs"),
+                                            _class="cap-label"
+                                            ),
+                                       SPAN(table.incidents.represent(record.incidents),
+                                            _class="cap-value"
+                                            ),
+                                       ),
+                                   DIV(_class="underline"
+                                       ),
+                                   DIV(SPAN(T("Resources"),
+                                            _class="cap-value upper"
+                                            ),
+                                       ),
+                                   )
+
+                    custom_widget_3 = dict(type = "custom",
+                                           fn = custom_widget_fn_3,
+                                           )
+
+                    s3db.configure(tablename,
+                                   profile_header = profile_header,
+                                   profile_layers = (layer,),
+                                   profile_widgets = (custom_widget_1,
+                                                      map_widget,
+                                                      custom_widget_2,
+                                                      custom_widget_3,
+                                                      ),
+                                   )
+
+                    response.s3.stylesheets.append("../themes/default/cap.css")
+
+                elif r.method != "import" and not get_vars.get("_next"):
+                    s3.crud.submit_style = "hide"
+                    s3.crud.custom_submit = (("edit_info",
+                                              T("Save and edit information"),
+                                              "",
+                                              ),)
+
+            elif r.component_name == "area":
+                atable = r.component.table
+                # Limit to those for this Alert
+                atable.info_id.requires = IS_EMPTY_OR(
+                                                IS_ONE_OF(db, "cap_info.id",
+                                                          s3db.cap_info_represent,
+                                                          filterby="alert_id",
+                                                          filter_opts=(r.id,),
+                                                          ))
+                for f in ("event_type_id", "priority"):
+                    # Do not show for the actual area
+                    field = atable[f]
+                    field.writable = field.readable = False
+                
+                # Auto assign the info_id to area if only one info segment
+                itable = s3db.cap_info
+                rows = db(itable.alert_id == r.record.id).select(itable.id)
+                if len(rows) == 1:
+                    field = atable.info_id
+                    field.default = rows.first().id
+                    field.writable = field.readable = False
+                    
+            elif r.component_name == "resource":
+                atable = r.component.table
+                # Limit to those for this Alert
+                atable.info_id.requires = IS_EMPTY_OR(
+                                                IS_ONE_OF(db, "cap_info.id",
+                                                          s3db.cap_info_represent,
+                                                          filterby="alert_id",
+                                                          filter_opts=(r.id,),
+                                                          ))
+                
+                # Auto assign the info_id to area if only one info segment
+                itable = s3db.cap_info
+                rows = db(itable.alert_id == r.record.id).select(itable.id)
+                if len(rows) == 1:
+                    field = atable.info_id
+                    field.default = rows.first().id
+                    field.writable = field.readable = False
+
+            # @ToDo: Move inside correct component context (None?)
+            post_vars = request.post_vars
+            if post_vars.get("edit_info", False):
+                tid = post_vars["template_id"]
+                if tid:
+                    # Read template and copy locked fields to post_vars
+                    table = db.cap_alert
+                    template = db(table.id == tid).select(table.template_settings,
+                                                          limitby=(0, 1)).first()
+                    try:
+                        tsettings = json.loads(template.template_settings)
+                    except ValueError:
+                        tsettings = dict()
+                    if isinstance(tsettings.get("locked", False), dict):
+                        locked_fields = [lf for lf in tsettings["locked"] if tsettings["locked"]]
+                        for lf in locked_fields:
+                            post_vars[lf] = template[lf]
         info_prep(r)
         return True
     s3.prep = prep
 
     def postp(r, output):
-        """
-            REST post-processor:
-             - check to see if "Save and add information" was pressed
-        """
 
+        # Check to see if "Save and add information" was pressed
         lastid = r.resource.lastid
         if lastid and request.post_vars.get("edit_info", False):
             table = db.cap_alert
             alert = db(table.id == lastid).select(table.template_id,
-                                                  limitby=(0, 1)
-                                                  ).first()
+                                                  limitby=(0, 1)).first()
 
             if alert:
-                # @ToDo: replace this with a retrieve of just the wanted fields
-                # - faster & safer
-                rows = db(db.cap_info.alert_id == alert.template_id).select()
-                for row in rows:
-                    row_clone = row.as_dict()
-                    unwanted_fields = ["deleted_rb",
+                # Clone all cap_info entries from the alert template
+                itable = s3db.cap_info
+                unwanted_fields = set(("deleted_rb",
                                        "owned_by_user",
                                        "approved_by",
                                        "mci",
@@ -144,104 +609,225 @@ def alert():
                                        # Don't copy this: make an
                                        # Ajax call instead
                                        "template_settings",
-                                       "id"
-                                      ]
-                    for key in unwanted_fields:
-                        try:
-                            row_clone.pop(key)
-                        except KeyError:
-                            pass
-
+                                       ))
+                fields = [itable[f] for f in itable.fields
+                                    if f not in unwanted_fields]
+                rows = db(itable.alert_id == alert.template_id).select(*fields)
+                for row in rows:
+                    row_clone = row.as_dict()
+                    del row_clone["id"]
                     row_clone["alert_id"] = lastid
                     row_clone["template_info_id"] = row.id
                     row_clone["is_template"] = False
+                    itable.insert(**row_clone)
 
-                    db.cap_info.insert(**row_clone)
+                # Clone all cap_resource entries from the alert template
+                # First get the info_id
+                itable = s3db.cap_info
+                rows = db(itable.alert_id == lastid).select(itable.id)
+                    
+                rtable = s3db.cap_resource
+                r_unwanted_fields = set(("deleted_rb",
+                                         "owned_by_user",
+                                         "approved_by",
+                                         "mci",
+                                         "deleted",
+                                         "modified_on",
+                                         "realm_entity",
+                                         "uuid",
+                                         "created_on",
+                                         "deleted_fk",
+                                         "created_by",
+                                         "modified_by",
+                                         "owned_by_group",
+                                         ))
+                rfields = [rtable[f] for f in rtable.fields
+                                     if f not in r_unwanted_fields]
+                rows_ = db(rtable.alert_id == alert.template_id).select(*rfields)
+                for row in rows_:
+                    row_clone = row.as_dict()
+                    del row_clone["id"]
+                    row_clone["alert_id"] = lastid
+                    row_clone["is_template"] = False
+                    # Use the info_id here
+                    if len(rows) == 1:
+                        row_clone["info_id"] = rows.first().id
+                    else:
+                        del row_clone["info_id"]
+                    rtable.insert(**row_clone)
 
-            r.next = URL(c="cap", f="alert",
-                         args=[lastid, "info"])
+            r.next = URL(c="cap", f="alert", args=[lastid, "info"])
 
-        if r.method != "search" and "form" in output:
-            if not r.component:
-                fields = s3db.cap_info_labels()
-                jsobj = []
-                for f in fields:
-                    jsobj.append("'%s': '%s'" % (f, fields[f].replace("'", "\\'")))
-                s3.js_global.append('''i18n.cap_info_labels={%s}''' % ", ".join(jsobj))
-                form = output["form"]
-                form[0][-1][0][0].update(_value=T("Save and edit information"),
-                                         _name="edit_info")
-                form.update(_class="cap_alert_form")
-            set_priority_js()
+        if r.interactive:
+            if get_vars.get("_next"):
+                r.next = get_vars.get("_next")
+            #if r.component_name == "info":
+            #    update_url = URL(f="info", args=["[id]"])
+            #    s3_action_buttons(r, update_url=update_url)
+
+            #if r.component_name == "area":
+            #    update_url = URL(f="area", args=["[id]"])
+            #    s3_action_buttons(r, update_url=update_url)
+
+            if isinstance(output, dict) and "form" in output:
+                if not r.component and \
+                   r.method not in ("import", "import_feed", "profile"):
+                    fields = s3db.cap_info_labels()
+                    jsobj = []
+                    for f in fields:
+                        jsobj.append("'%s': '%s'" % (f, fields[f].replace("'", "\\'")))
+                    s3.js_global.append('''i18n.cap_info_labels={%s}''' % ", ".join(jsobj))
+                    form = output["form"]
+                    form.update(_class="cap_alert_form")
+                set_priority_js()
+
+        elif r.representation == "plain":
+            # Map Popup: style like the dataList
+            list_fields = ["info.headline",
+                           "area.name",
+                           "info.priority",
+                           "status",
+                           "scope",
+                           "info.event_type_id",
+                           "info.description",
+                           "info.response_type",
+                           "info.sender_name",
+                           ]
+
+            record = r.resource.select(list_fields,
+                                       as_rows=True,
+                                       #represent=True,
+                                       #show_links=False,
+                                       ).first()
+
+            output = s3db.cap_alert_list_layout("map_popup", # list_id
+                                                "map_popup", # item_id
+                                                None, #r.resource,
+                                                None, # rfields
+                                                record
+                                                )
 
         return output
     s3.postp = postp
 
-    output = s3_rest_controller(rheader=s3db.cap_alert_rheader)
+    output = s3_rest_controller("cap", "alert",
+                                rheader = s3db.cap_rheader,
+                                )
     return output
 
 # -----------------------------------------------------------------------------
 def info():
-    """ REST controller for CAP info segments """
+    """
+        REST controller for CAP info segments
+        - shouldn't ever be called
+    """
 
-    s3.prep = info_prep
+    def prep(r):
+        result = info_prep(r)
+        if result:
+            if not r.component and r.representation == "html":
+                s3.crud.custom_submit = (("add_language",
+                                          T("Save and add another language..."),
+                                          "",
+                                          ),)
+
+        return result
+    s3.prep = prep
 
     def postp(r, output):
-        if r.representation == "html" and not r.component and "form" in output:
-            set_priority_js()
-            add_submit_button(output["form"], "add_language",
-                              T("Save and add another language..."))
+        if r.representation == "html":
+            if r.component_name == "area":
+                update_url = URL(f="area", args=["[id]"])
+                s3_action_buttons(r, update_url=update_url)
+
+            if not r.component and "form" in output:
+                set_priority_js()
+
         return output
     s3.postp = postp
 
-    output = s3_rest_controller(rheader=s3db.cap_info_rheader)
+    output = s3_rest_controller(rheader = s3db.cap_rheader)
     return output
 
 # -----------------------------------------------------------------------------
 def template():
     """ REST controller for CAP templates """
 
+    atable = s3db.cap_alert
+    s3.filter = (atable.is_template == True)
+
     viewing = request.vars["viewing"]
+    tablename = "cap_alert"
+    
     if viewing:
-        table, id = viewing.strip().split(".")
-        if table == "cap_alert":
-            redirect(URL(c="cap", f="template", args=[id]))
-            return False
+        table, _id = viewing.strip().split(".")
+        if table == tablename:
+            redirect(URL(c="cap", f="template", args=[_id]))
 
     def prep(r):
-        atable = db.cap_alert
-        for f in ["identifier", "msg_type"]:
+        list_fields = ["template_title",
+                       "info.event_type_id",
+                       "scope",
+                       "incidents",
+                       "info.category",
+                       ]
+        
+        s3db.configure(tablename,
+                       list_fields = list_fields,
+                       )
+        
+        for f in ("identifier", "msg_type"):
             field = atable[f]
             field.writable = False
             field.readable = False
             field.requires = None
-        for f in ["status", "scope"]:
-            atable[f].requires = None
-        atable.template_title.required = True
-
+        atable.template_title.requires = IS_NOT_EMPTY()
+        atable.status.readable = atable.status.writable = False
         itable = db.cap_info
-        for f in ["urgency", "certainty",
-                  "priority", "severity",
-                  "effective", "onset", "expires"]:
+        for f in ("event",
+                  "urgency",
+                  "certainty",
+                  "priority",
+                  "severity",
+                  "effective",
+                  "onset",
+                  "expires",
+                  ):
             field = itable[f]
             field.writable = False
             field.readable = False
             field.required = False
 
-        for f in ["category", "event"]:
-            itable[f].required = False
+        itable.category.required = False
 
-        ADD_ALERT_TPL = T("Create Template")
-        s3.crud_strings["cap_template"] = Storage(
-            title_create = ADD_ALERT_TPL,
+        if r.component_name == "resource":
+            rtable = r.component.table
+            # Limit to those for this Alert
+            rtable.info_id.requires = IS_EMPTY_OR(
+                                            IS_ONE_OF(db, "cap_info.id",
+                                                      s3db.cap_info_represent,
+                                                      filterby="alert_id",
+                                                      filter_opts=(r.id,),
+                                                      ))
+            
+            # Set is_template to true as only accessed by template
+            rtable.is_template.default = True
+            
+            # Auto assign the info_id to area if only one info segment
+            itable = s3db.cap_info
+            rows = db(itable.alert_id == r.record.id).select(itable.id)
+            if len(rows) == 1:
+                field = rtable.info_id
+                field.default = rows.first().id
+                field.writable = field.readable = False
+            
+        s3.crud_strings[tablename] = Storage(
+            label_create = T("Create Template"),
             title_display = T("Template"),
             title_list = T("Templates"),
             title_update = T("Edit Template"), # If already-published, this should create a new "Update" alert instead of modifying the original
             title_upload = T("Import Templates"),
-            title_search = T("Search Templates"),
-            subtitle_create = T("Create new Template"),
             label_list_button = T("List Templates"),
-            label_create_button = ADD_ALERT_TPL,
             label_delete_button = T("Delete Template"),
             msg_record_created = T("Template created"),
             msg_record_modified = T("Template modified"),
@@ -251,7 +837,10 @@ def template():
         if r.representation == "html":
             alert_fields_comments()
             s3.scripts.append("/%s/static/scripts/json2.min.js" % appname)
-            s3.scripts.append("/%s/static/scripts/S3/s3.cap.js" % appname)
+            if s3.debug:
+                s3.scripts.append("/%s/static/scripts/S3/s3.cap.js" % appname)
+            else:
+                s3.scripts.append("/%s/static/scripts/S3/s3.cap.min.js" % appname)
             s3.stylesheets.append("S3/cap.css")
 
         return True
@@ -261,7 +850,7 @@ def template():
         if r.interactive and "form" in output:
             s3.js_global.append('''i18n.cap_locked="%s"''' % T("Locked"))
             tablename = r.tablename
-            if tablename == "cap_alert":
+            if tablename == tablename:
                 output["form"].add_class("cap_template_form")
             elif tablename == "cap_info":
                 output["form"].add_class("cap_info_template_form")
@@ -269,21 +858,122 @@ def template():
     s3.postp = postp
 
     output = s3_rest_controller("cap", "alert",
-                                rheader=s3db.cap_template_rheader)
+                                rheader = s3db.cap_rheader)
     return output
 
 # -----------------------------------------------------------------------------
-def add_submit_button(form, name, value):
+def area():
     """
-        Append a submit button to a form
+        REST controller for CAP area
+        Should only be accessed for defining area template
     """
 
-    form[0][-1][0].insert(1,
-                          TAG[""](" ",
-                                  INPUT(_type="submit", _name=name,
-                                        _value=value)))
+    def prep(r):        
+        artable = s3db.cap_area
+        for f in ("alert_id", "info_id"):
+            field = artable[f]
+            field.writable = False
+            field.readable = False
+        
+        # Area create from this controller is template
+        artable.is_template.default = True
+        
+        return True
+    s3.prep = prep
+    
+    def postp(r, output):
+        if r.interactive and r.component and r.component_name == "area_location":
+            # Modify action button to open cap/area_location directly.
+            #read_url = URL(c="cap", f="area_location", args=["[id]"])
+            update_url = URL(c="cap", f="area_location", args=["[id]", "update"])
+            delete_url = URL(c="cap", f="area_location", args=["[id]", "delete"])
+            s3_action_buttons(r,
+                              update_url=update_url,
+                              delete_url=delete_url,
+                              )
+        return output
+    s3.postp = postp
 
-    return
+    output = s3_rest_controller("cap", "area",
+                                rheader = s3db.cap_rheader)
+    return output
+
+# -----------------------------------------------------------------------------
+def warning_priority():
+    """
+        RESTful CRUD controller
+    """
+
+    return s3_rest_controller()
+
+# -----------------------------------------------------------------------------
+def priority_get():
+    
+    try:
+        event_type_id = request.args[0]
+    except:
+        result = current.xml.json_message(False, 400, "No Event Type provided!")
+    else:
+        try:
+            event_type_id = int(event_type_id)
+        except:
+            result = current.xml.json_message(False, 400, "Invalid Event Type!")
+        else:
+            # Get Event Name for Event ID 
+            etable = s3db.event_event_type
+            item = db(etable.id == event_type_id).select(etable.name,
+                                                         limitby=(0, 1)
+                                                         ).first()
+            try:
+                event_type_name = item.name
+            except:
+                result = current.xml.json_message(False, 400, "Event Type Not Found!")
+            else:
+                wptable = s3db.cap_warning_priority
+                query = (wptable.event_type == event_type_name)
+                      
+                rows = db(query).select(wptable.id,
+                                        wptable.name,
+                                        orderby = wptable.id)
+
+                from gluon.serializers import json as jsons
+                if rows:
+                    row_dict = [{"id": r.id, "name": T(r.name)} for r in rows] + \
+                               [{"id": "", "name": T("Undefined")}]
+                    result = jsons(row_dict)
+                else:
+                    rows = db(wptable.event_type == "others").select(wptable.id, 
+                                                                     wptable.name,
+                                                                     orderby = wptable.id)
+            
+                    row_dict = [{"id": r.id, "name": T(r.name)} for r in rows] + \
+                               [{"id": "", "name": T("Undefined")}]
+                    result = jsons(row_dict)
+    finally:
+        response.headers["Content-Type"] = "application/json"
+        return result
+    
+# -----------------------------------------------------------------------------
+def compose():
+    """
+        Send message to the people with role of Alert Approval
+    """
+    
+    # For SAMBRO, permission is checked by the Authentication Roles but the permission
+    # should be checked if CAP module is enabled
+    if settings.has_module("msg"):        
+        # Notify People with the role of Alert Approval via email and SMS
+        pe_ids = get_vars.get("pe_ids")
+        alert_id = get_vars.get("cap_alert.id")
+        subject = "%s: Alert Approval Required" % settings.get_system_name_short()
+        url = "%s%s" % (settings.get_base_public_url(),
+                        URL(c="cap", f="alert", args=[alert_id, "review"]))
+        message = "You are requested to take action on this alert:\n\n%s" % url
+        msg.send_by_pe_id(pe_ids, subject, message)
+        msg.send_by_pe_id(pe_ids, subject, message, contact_method = "SMS")
+        session.confirmation = T("Alert Approval Notified")
+        
+    redirect(URL(c="cap", f="alert"))
 
 # -----------------------------------------------------------------------------
 def alert_fields_comments():
@@ -371,23 +1061,23 @@ def area_fields_comments():
     """
 
     table = db.cap_area
-    table.area_desc.comment = DIV(
+    table.name.comment = DIV(
           _class="tooltip",
           _title="%s|%s" % (
               T("The affected area of the alert message"),
               T("A text description of the affected area.")))
 
-    table.circle.comment = DIV(
-          _class="tooltip",
-          _title="%s|%s" % (
-              T("A point and radius delineating the affected area"),
-              T("The circular area is represented by a central point given as a coordinate pair followed by a radius value in kilometers.")))
+    # table.circle.comment = DIV(
+          # _class="tooltip",
+          # _title="%s|%s" % (
+              # T("A point and radius delineating the affected area"),
+              # T("The circular area is represented by a central point given as a coordinate pair followed by a radius value in kilometers.")))
 
-    table.geocode.comment = DIV(
-          _class="tooltip",
-          _title="%s|%s" % (
-              T("The geographic code delineating the affected area"),
-              T("Any geographically-based code to describe a message target area, in the form. The key is a user-assigned string designating the domain of the code, and the content of value is a string (which may represent a number) denoting the value itself (e.g., name='ZIP' and value='54321'). This should be used in concert with an equivalent description in the more universally understood polygon and circle forms whenever possible.")))
+    # table.geocode.comment = DIV(
+          # _class="tooltip",
+          # _title="%s|%s" % (
+              # T("The geographic code delineating the affected area"),
+              # T("Any geographically-based code to describe a message target area, in the form. The key is a user-assigned string designating the domain of the code, and the content of value is a string (which may represent a number) denoting the value itself (e.g., name='ZIP' and value='54321'). This should be used in concert with an equivalent description in the more universally understood polygon and circle forms whenever possible.")))
 
     table.altitude.comment = DIV(
           _class="tooltip",
@@ -424,7 +1114,7 @@ def info_fields_comments():
           _class="tooltip",
           _title="%s|%s" % (
               T("The text denoting the type of the subject event of the alert message"),
-              T("")))
+              T("If not specified, will the same as the Event Type.")))
 
     table.response_type.comment = DIV(
           _class="tooltip",
@@ -579,8 +1269,21 @@ def resource_fields_comments():
 def set_priority_js():
     """ Output json for priority field """
 
-    p_settings = [f[0:1] + f[2:] for f in settings.get_cap_priorities()]
-    priority_conf = '''S3.cap_priorities=%s''' % json.dumps(p_settings)
+    wptable = s3db.cap_warning_priority
+    
+    rows = db(wptable).select(wptable.name, 
+                              wptable.urgency, 
+                              wptable.severity,
+                              wptable.certainty, 
+                              wptable.color_code,
+                              orderby = wptable.name,
+                              )
+    
+    from gluon.serializers import json as jsons
+    p_settings = [(T(r.name), r.urgency, r.severity, r.certainty, r.color_code)\
+                 for r in rows]
+    
+    priority_conf = '''S3.cap_priorities=%s''' % jsons(p_settings)
     js_global = s3.js_global
     if not priority_conf in js_global:
         js_global.append(priority_conf)

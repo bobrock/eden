@@ -4,7 +4,7 @@
 
     @requires: U{B{I{gluon}} <http://web2py.com>}
 
-    @copyright: 2009-2013 (c) Sahana Software Foundation
+    @copyright: 2009-2015 (c) Sahana Software Foundation
     @license: MIT
 
     Permission is hereby granted, free of charge, to any person
@@ -37,17 +37,17 @@ from uuid import uuid4
 from gluon import *
 # Here are dependencies listed for reference:
 #from gluon import current
-#from gluon.dal import Field
 #from gluon.html import *
 #from gluon.validators import *
-from gluon.dal import Query, SQLCustomType
 from gluon.storage import Storage
 from gluon.languages import lazyT
 
+from s3dal import Query, SQLCustomType
+from s3datetime import S3DateTime
 from s3navigation import S3ScriptItem
-from s3utils import S3DateTime, s3_auth_user_represent, s3_auth_user_represent_name, s3_auth_group_represent, s3_unicode
-from s3validators import IS_ONE_OF, IS_UTC_DATETIME
-from s3widgets import S3AutocompleteWidget, S3DateWidget, S3DateTimeWidget
+from s3utils import s3_auth_user_represent, s3_auth_user_represent_name, s3_unicode, S3MarkupStripper
+from s3validators import IS_ONE_OF, IS_UTC_DATE, IS_UTC_DATETIME
+from s3widgets import S3CalendarWidget, S3DateWidget, S3DateTimeWidget
 
 try:
     db = current.db
@@ -130,7 +130,7 @@ class QueryS3(Query):
 
     def __init__(self, left, op=None, right=None):
 
-        if op <> "join_via":
+        if op != "join_via":
             Query.__init__(self, left, op, right)
         else:
             self.sql = "CAST(TRIM(%s,"|") AS INTEGER)=%s" % (left, right)
@@ -159,8 +159,12 @@ class S3ReusableField(object):
 
         ia = Storage(self.attr)
 
+        DEFAULT = "default"
+        widgets = ia.pop("widgets", {})
+
         if attr:
-            if not attr.get("empty", True):
+            empty = attr.pop("empty", True)
+            if not empty:
                 requires = ia.requires
                 if requires:
                     if not isinstance(requires, (list, tuple)):
@@ -170,9 +174,22 @@ class S3ReusableField(object):
                         if isinstance(r, IS_EMPTY_OR):
                             requires = r.other
                             ia.update(requires=requires)
-            if "empty" in attr:
-                del attr["empty"]
+            widget = attr.pop("widget", DEFAULT)
             ia.update(**attr)
+        else:
+            widget = DEFAULT
+
+        if isinstance(widget, basestring):
+            if widget == DEFAULT and "widget" in ia:
+                widget = ia.widget
+            else:
+                if not isinstance(widgets, dict):
+                    widgets = {DEFAULT: widgets}
+                if widget != DEFAULT and widget not in widgets:
+                    raise NameError("Undefined widget: %s" % widget)
+                else:
+                    widget = widgets.get(widget)
+        ia.widget = widget
 
         if "script" in ia:
             if ia.script:
@@ -206,7 +223,7 @@ class S3Represent(object):
         @group Internal Methods: _setup,
                                  _lookup
     """
-    
+
     def __init__(self,
                  lookup=None,
                  key=None,
@@ -217,8 +234,11 @@ class S3Represent(object):
                  linkto=None,
                  show_link=False,
                  multiple=False,
+                 hierarchy=False,
                  default=None,
-                 none=None):
+                 none=None,
+                 field_sep=" "
+                 ):
         """
             Constructor
 
@@ -232,12 +252,15 @@ class S3Represent(object):
             @param options: dictionary of options to lookup the representation
                             of a value, overrides lookup and key
             @param multiple: web2py list-type (all values will be lists)
+            @param hierarchy: render a hierarchical representation, either
+                              True or a string template like "%s > %s"
             @param translate: translate all representations (using T)
             @param linkto: a URL (as string) to link representations to,
                            with "[id]" as placeholder for the key
             @param show_link: whether to add a URL to representations
             @param default: default representation for unknown options
             @param none: representation for empty fields (None or empty list)
+            @param field_sep: separator to use to join fields
         """
 
         self.tablename = lookup
@@ -247,17 +270,21 @@ class S3Represent(object):
         self.labels = labels
         self.options = options
         self.list_type = multiple
+        self.hierarchy = hierarchy
         self.translate = translate
         self.linkto = linkto
         self.show_link = show_link
         self.default = default
         self.none = none
+        self.field_sep = field_sep
         self.setup = False
         self.theset = None
         self.queries = 0
         self.lazy = []
         self.lazy_show_link = False
-        
+
+        self.rows = {}
+
         # Attributes to simulate being a function for sqlhtml's represent()
         # Make sure we indicate only 1 position argument
         self.func_code = Storage(co_argcount = 1)
@@ -290,7 +317,7 @@ class S3Represent(object):
         return rows
 
     # -------------------------------------------------------------------------
-    def represent_row(self, row):
+    def represent_row(self, row, prefix=None):
         """
             Represent the referenced row.
             (in foreign key representations)
@@ -313,16 +340,22 @@ class S3Represent(object):
             # Default
             values = [row[f] for f in self.fields if row[f] not in (None, "")]
             if values:
-                v = " ".join([s3_unicode(v) for v in values])
+                sep = self.field_sep
+                v = sep.join([s3_unicode(v) for v in values])
             else:
                 v = self.none
         if self.translate and not type(v) is lazyT:
-            return current.T(v)
+            output = current.T(v)
         else:
-            return v
+            output = v
+
+        if prefix and self.hierarchy:
+            return self.htemplate % (prefix, output)
+
+        return output
 
     # -------------------------------------------------------------------------
-    def link(self, k, v):
+    def link(self, k, v, row=None):
         """
             Represent a (key, value) as hypertext link.
 
@@ -335,6 +368,7 @@ class S3Represent(object):
 
             @param k: the key
             @param v: the representation of the key
+            @param row: the row with this key (unused in the base class)
         """
 
         if self.linkto:
@@ -373,7 +407,8 @@ class S3Represent(object):
             rows = [row] if row is not None else None
             items = self._lookup([value], rows=rows)
             if value in items:
-                r = self.link(value, items[value]) \
+                k, v = value, items[value]
+                r = self.link(k, v, row=self.rows.get(k)) \
                     if show_link else items[value]
             else:
                 r = self.default
@@ -416,16 +451,17 @@ class S3Represent(object):
             items = self._lookup(values, rows=rows)
             if show_link:
                 link = self.link
-                labels = [[link(v, s3_unicode(items[v])), ", "]
-                          if v in items else [default, ", "]
-                          for v in values]
+                rows = self.rows
+                labels = [[link(k, s3_unicode(items[k]), row=rows.get(k)), ", "]
+                          if k in items else [default, ", "]
+                          for k in values]
                 if labels:
                     return TAG[""](list(chain.from_iterable(labels))[:-1])
                 else:
                     return ""
             else:
-                labels = [s3_unicode(items[v])
-                          if v in items else default for v in values]
+                labels = [s3_unicode(items[k])
+                          if k in items else default for k in values]
                 if labels:
                     return ", ".join(labels)
         return self.none
@@ -436,7 +472,7 @@ class S3Represent(object):
             Represent multiple values as dict {value: representation}
 
             @param values: list of values
-            @param rows: the referenced rows (if values are foreign keys)
+            @param rows: the rows
             @param show_link: render each representation as link
 
             @return: a dict {value: representation}
@@ -453,7 +489,14 @@ class S3Represent(object):
         # Get the values
         if rows and self.table:
             key = self.key
-            values = [row[key] for row in rows]
+            _rows = self.rows
+            values = set()
+            add_value = values.add
+            for row in rows:
+                value = row[key]
+                _rows[value] = row
+                add_value(value)
+            values = list(values)
         elif self.list_type and list_type:
             try:
                 hasnone = None in values
@@ -472,10 +515,12 @@ class S3Represent(object):
             labels = self._lookup(values, rows=rows)
             if show_link:
                 link = self.link
-                labels = dict([(v, link(v, r)) for v, r in labels.items()])
-            for v in values:
-                if v not in labels:
-                    labels[v] = self.default
+                rows = self.rows
+                labels = dict((k, link(k, v, rows.get(k)))
+                               for k, v in labels.items())
+            for k in values:
+                if k not in labels:
+                    labels[k] = self.default
         else:
             labels = {}
         labels[None] = self.none
@@ -521,7 +566,7 @@ class S3Represent(object):
         if self.default is None:
             self.default = s3_unicode(messages.UNKNOWN_OPT)
         if self.none is None:
-            self.none = s3_unicode(messages["NONE"])
+            self.none = messages["NONE"]
 
         # Initialize theset
         if self.options is not None:
@@ -545,7 +590,7 @@ class S3Represent(object):
                     self.table = table
                 if self.linkto is None and self.show_link:
                     c, f = tablename.split("_", 1)
-                    self.linkto = URL(c=c, f=f, args=["[id]"])
+                    self.linkto = URL(c=c, f=f, args=["[id]"], extension="")
 
         # What type of renderer do we use?
         labels = self.labels
@@ -553,6 +598,12 @@ class S3Represent(object):
         self.slabels = isinstance(labels, basestring)
         # External renderer?
         self.clabels = callable(labels)
+
+        # Hierarchy template
+        if isinstance(self.hierarchy, basestring):
+            self.htemplate = self.hierarchy
+        else:
+            self.htemplate = "%s > %s"
 
         self.setup = True
         return
@@ -568,24 +619,53 @@ class S3Represent(object):
         """
 
         theset = self.theset
-        
+
+        keys = {}
         items = {}
         lookup = {}
 
         # Check whether values are already in theset
-        for v in values:
+        table = self.table
+        for _v in values:
+            v = _v
+            if v is not None and table and isinstance(v, basestring):
+                try:
+                    v = int(_v)
+                except ValueError:
+                    pass
+            keys[v] = _v
             if v is None:
-                items[v] = self.none
+                items[_v] = self.none
             elif v in theset:
-                items[v] = theset[v]
+                items[_v] = theset[v]
             else:
                 lookup[v] = True
-        if self.table is None or not lookup:
+
+        if table is None or not lookup:
             return items
+
+        if table and self.hierarchy:
+            # Does the lookup table have a hierarchy?
+            from s3hierarchy import S3Hierarchy
+            h = S3Hierarchy(table._tablename)
+            if h.config:
+                def lookup_parent(node_id):
+                    parent = h.parent(node_id)
+                    if parent and \
+                       parent not in theset and \
+                       parent not in lookup:
+                        lookup[parent] = False
+                        lookup_parent(parent)
+                    return
+                for node_id in lookup.keys():
+                    lookup_parent(node_id)
+            else:
+                h = None
+        else:
+            h = None
 
         # Get the primary key
         pkey = self.key
-        table = self.table
         ogetattr = object.__getattribute__
         try:
             key = ogetattr(table, pkey)
@@ -596,12 +676,14 @@ class S3Represent(object):
         pop = lookup.pop
         represent_row = self.represent_row
         if rows and not self.custom_lookup:
+            _rows = self.rows
             for row in rows:
                 k = row[key]
+                _rows[k] = row
                 if k not in theset:
                     theset[k] = represent_row(row)
                 if pop(k, None):
-                    items[k] = theset[k]
+                    items[keys.get(k, k)] = theset[k]
 
         # Retrieve additional rows as needed
         if lookup:
@@ -611,25 +693,67 @@ class S3Represent(object):
                     fields = [ogetattr(table, f) for f in self.fields]
                 except AttributeError:
                     # Ok - they are not: provide debug output and filter fields
-                    if current.response.s3.debug:
-                        from s3utils import s3_debug
-                        s3_debug(sys.exc_info()[1])
+                    current.log.error(sys.exc_info()[1])
                     fields = [ogetattr(table, f)
                               for f in self.fields if hasattr(table, f)]
             else:
                 fields = []
             rows = self.lookup_rows(key, lookup.keys(), fields=fields)
-            for row in rows:
-                k = row[key]
-                lookup.pop(k, None)
-                items[k] = theset[k] = represent_row(row)
+            rows = dict((row[key], row) for row in rows)
+            self.rows.update(rows)
+            if h:
+                represent_path = self._represent_path
+                for k, row in rows.items():
+                    if lookup.pop(k, None):
+                        items[keys.get(k, k)] = represent_path(k,
+                                                               row,
+                                                               rows=rows,
+                                                               hierarchy=h)
+            else:
+                for k, row in rows.items():
+                    lookup.pop(k, None)
+                    items[keys.get(k, k)] = theset[k] = represent_row(row)
 
         if lookup:
             for k in lookup:
-                items[k] = self.default
+                items[keys.get(k, k)] = self.default
 
-        # Done
         return items
+
+    # -------------------------------------------------------------------------
+    def _represent_path(self, value, row, rows=None, hierarchy=None):
+        """
+            Recursive helper method to represent value as path in
+            a hierarchy.
+
+            @param value: the value
+            @param row: the row containing the value
+            @param rows: all rows from _loopup as dict
+            @param hierarchy: the S3Hierarchy instance
+        """
+
+        theset = self.theset
+
+        if value in theset:
+            return theset[value]
+
+        represent_row = self.represent_row
+
+        prefix = None
+        parent = hierarchy.parent(value)
+
+        if parent:
+            if parent in theset:
+                prefix = theset[parent]
+            elif parent in rows:
+                prefix = self._represent_path(parent,
+                                              rows[parent],
+                                              rows=rows,
+                                              hierarchy=hierarchy)
+
+        result = self.represent_row(row, prefix=prefix)
+        theset[value] = result
+        return result
 
 # =============================================================================
 class S3RepresentLazy(object):
@@ -717,8 +841,7 @@ class S3RepresentLazy(object):
 
         # Render value
         text = self.represent()
-        if hasattr(text, "xml"):
-            text = s3_unicode(text)
+        text = s3_unicode(text)
 
         # Strip markup + XML-escape
         if text and "<" in text:
@@ -748,14 +871,14 @@ s3uuid = SQLCustomType(type = "string",
                                     else str(x.encode("utf-8"))),
                        decoder = lambda x: x)
 
-if db and current.db._adapter.represent("X", s3uuid) != "'X'":
-    # Old web2py DAL, must add quotes in encoder
-    s3uuid = SQLCustomType(type = "string",
-                           native = "VARCHAR(128)",
-                           encoder = (lambda x: "'%s'" % (uuid4().urn
-                                        if x == ""
-                                        else str(x.encode("utf-8")).replace("'", "''"))),
-                           decoder = (lambda x: x))
+#if db and current.db._adapter.represent("X", s3uuid) != "'X'":
+#    # Old web2py DAL, must add quotes in encoder
+#    s3uuid = SQLCustomType(type = "string",
+#                           native = "VARCHAR(128)",
+#                           encoder = (lambda x: "'%s'" % (uuid4().urn
+#                                        if x == ""
+#                                        else str(x.encode("utf-8")).replace("'", "''"))),
+#                           decoder = (lambda x: x))
 
 # Universally unique identifier for a record
 s3_meta_uuid = S3ReusableField("uuid", type=s3uuid,
@@ -893,18 +1016,20 @@ def s3_ownerstamp():
                                              writable=False,
                                              requires=None,
                                              default=None,
-                                             represent=s3_auth_group_represent)
+                                             represent=S3Represent(lookup="auth_group",
+                                                                   fields=["role"])
+                                             )
 
     # Person Entity controlling access to this record
     s3_meta_realm_entity = S3ReusableField("realm_entity", "integer",
-                                              readable=False,
-                                              writable=False,
-                                              requires=None,
-                                              default=None,
-                                              # use a lambda here as we don't
-                                              # want the model to be loaded yet
-                                              represent=lambda val: \
-                                                current.s3db.pr_pentity_represent(val))
+                                           readable=False,
+                                           writable=False,
+                                           requires=None,
+                                           default=None,
+                                           # use a lambda here as we don't
+                                           # want the model to be loaded yet
+                                           represent=lambda val: \
+                                               current.s3db.pr_pentity_represent(val))
     return (s3_meta_owned_by_user(),
             s3_meta_owned_by_group(),
             s3_meta_realm_entity())
@@ -914,8 +1039,6 @@ def s3_meta_fields():
     """
         Normal meta-fields added to every table
     """
-
-    utable = current.auth.settings.table_user
 
     # Approver of a record
     s3_meta_approved_by = S3ReusableField("approved_by", "integer",
@@ -950,16 +1073,17 @@ def s3_role_required():
 
     T = current.T
     gtable = current.auth.settings.table_group
+    represent = S3Represent(lookup="auth_group", fields=["role"])
     f = S3ReusableField("role_required", gtable,
             sortby="role",
-            requires = IS_NULL_OR(
-                        IS_ONE_OF(db, "auth_group.id",
-                                  "%(role)s",
+            requires = IS_EMPTY_OR(
+                        IS_ONE_OF(current.db, "auth_group.id",
+                                  represent,
                                   zero=T("Public"))),
-            widget = S3AutocompleteWidget("admin",
-                                          "group",
-                                          fieldname="role"),
-            represent = s3_auth_group_represent,
+            #widget = S3AutocompleteWidget("admin",
+            #                              "group",
+            #                              fieldname="role"),
+            represent = represent,
             label = T("Role Required"),
             comment = DIV(_class="tooltip",
                           _title="%s|%s" % (T("Role Required"),
@@ -975,32 +1099,25 @@ def s3_roles_permitted(name="roles_permitted", **attr):
         - used by CMS
     """
 
-    from s3validators import IS_ONE_OF
-
     T = current.T
+    represent = S3Represent(lookup="auth_group", fields=["role"])
     if "label" not in attr:
         attr["label"] = T("Roles Permitted")
     if "sortby" not in attr:
         attr["sortby"] = "role"
     if "represent" not in attr:
-        attr["represent"] = s3_auth_group_represent
+        attr["represent"] = represent
     if "requires" not in attr:
-        attr["requires"] = IS_NULL_OR(IS_ONE_OF(current.db,
-                                                "auth_group.id",
-                                                "%(role)s",
-                                                multiple=True))
+        attr["requires"] = IS_EMPTY_OR(IS_ONE_OF(current.db,
+                                                 "auth_group.id",
+                                                 represent,
+                                                 multiple=True))
     if "comment" not in attr:
         attr["comment"] = DIV(_class="tooltip",
                               _title="%s|%s" % (T("Roles Permitted"),
                                                 T("If this record should be restricted then select which role(s) are permitted to access the record here.")))
     if "ondelete" not in attr:
         attr["ondelete"] = "RESTRICT"
-
-    # @ToDo:
-    #if "widget" not in attr:
-    #    attr["widget"] = S3CheckboxesWidget(lookup_table_name = "auth_group",
-    #                                        lookup_field_name = "role",
-    #                                        multiple = True)
 
     f = S3ReusableField(name, "list:reference auth_group",
                         **attr)
@@ -1018,7 +1135,9 @@ def s3_comments(name="comments", **attr):
     if "label" not in attr:
         attr["label"] = T("Comments")
     if "represent" not in attr:
-        attr["represent"] = lambda comments: comments or current.messages["NONE"]
+        # Support HTML markup
+        attr["represent"] = lambda comments: \
+            XML(comments) if comments else current.messages["NONE"]
     if "widget" not in attr:
         attr["widget"] = s3_comments_widget
     if "comment" not in attr:
@@ -1050,7 +1169,7 @@ def s3_currency(name="currency", **attr):
         attr["requires"] = IS_IN_SET(currency_opts.keys(),
                                      zero=None)
     if "writable" not in attr:
-         attr["writable"] = settings.get_fin_currency_writable()
+        attr["writable"] = settings.get_fin_currency_writable()
 
     f = S3ReusableField(name, length=3,
                         **attr)
@@ -1059,311 +1178,331 @@ def s3_currency(name="currency", **attr):
 # =============================================================================
 def s3_date(name="date", **attr):
     """
-        Return a standard Date field
+        Return a standard date-field
 
-        Additional options to normal S3ReusableField:
-            default == "now" (in addition to usual meanings)
-            past = x months
-            future = x months
+        @param name: the field name
+
+        @keyword default: the field default, can be specified as "now" for
+                          current date, or as Python date
+        @keyword past: number of selectable past months
+        @keyword future: number of selectable future months
+        @keyword widget: the form widget for the field, can be specified
+                         as "date" for S3DateWidget, "calendar" for
+                         S3CalendarWidget, or as a web2py FormWidget,
+                         defaults to "calendar"
+        @keyword calendar: the calendar to use for this widget, defaults
+                           to current.calendar
+        @keyword start_field: CSS selector for the start field for interval
+                              selection
+        @keyword default_interval: the default interval
+        @keyword default_explicit: whether the user must click the field
+                                   to set the default, or whether it will
+                                   automatically be set when the value for
+                                   start_field is set
+        @keyword set_min: CSS selector for another date/time widget to
+                          dynamically set the minimum selectable date/time to
+                          the value selected in this widget
+        @keyword set_max: CSS selector for another date/time widget to
+                          dynamically set the maximum selectable date/time to
+                          the value selected in this widget
+
+        @note: other S3ReusableField keywords are also supported (in addition
+               to the above)
+
+        @note: calendar-option requires widget="calendar" (default), otherwise
+               Gregorian calendar is enforced for the field
+
+        @note: set_min/set_max only supported for widget="calendar" (default)
+
+        @note: interval options currently not supported by S3CalendarWidget,
+               only available with widget="date"
+        @note: start_field and default_interval should be given together
+
+        @note: sets a default field label "Date" => use label-keyword to
+               override if necessary
+        @note: sets a default validator IS_UTC_DATE => use requires-keyword
+               to override if necessary
+        @note: sets a default representation S3DateTime.date_represent => use
+               represent-keyword to override if necessary
+
+        @ToDo: Different default field name in case we need to start supporting
+               Oracle, where 'date' is a reserved word
     """
 
-    if "past" in attr:
-        past = attr["past"]
-        del attr["past"]
-    else:
-        past = None
-    if "future" in attr:
-        future = attr["future"]
-        del attr["future"]
-    else:
-        future = None
+    attributes = dict(attr)
 
-    if "default" in attr and attr["default"] == "now":
-        attr["default"] = current.request.utcnow
-    if "label" not in attr:
-        attr["label"] = current.T("Date")
-    if "represent" not in attr:
-        attr["represent"] = lambda d: S3DateTime.date_represent(d,
-                                                                utc=True)
-    if "requires" not in attr:
+    # Calendar
+    calendar = attributes.pop("calendar", None)
+
+    # Past and future options
+    past = attributes.pop("past", None)
+    future = attributes.pop("future", None)
+
+    # Label
+    if "label" not in attributes:
+        attributes["label"] = current.T("Date")
+
+    # Widget-specific options (=not intended for S3ReusableField)
+    WIDGET_OPTIONS = ("start_field",
+                      "default_interval",
+                      "default_explicit",
+                      "set_min",
+                      "set_max",
+                      )
+
+    # Widget
+    widget = attributes.get("widget", "calendar")
+    widget_options = {}
+    if widget == "date":
+        # Legacy: S3DateWidget
+        # @todo: deprecate (once S3CalendarWidget supports all legacy options)
+
+        # Must use Gregorian calendar
+        calendar == "Gregorian"
+
+        # Past/future options
+        if past is not None:
+            widget_options["past"] = past
+        if future is not None:
+            widget_options["future"] = future
+
+        # Supported additional widget options
+        SUPPORTED_OPTIONS = ("start_field",
+                             "default_interval",
+                             "default_explicit",
+                             )
+        for option in WIDGET_OPTIONS:
+            if option in attributes:
+                if option in SUPPORTED_OPTIONS:
+                    widget_options[option] = attributes[option]
+                del attributes[option]
+
+        widget = S3DateWidget(**widget_options)
+
+    elif widget == "calendar":
+
+        # Default: calendar widget
+        widget_options["calendar"] = calendar
+
+        # Past/future options
+        if past is not None:
+            widget_options["past_months"] = past
+        if future is not None:
+            widget_options["future_months"] = future
+
+        # Supported additional widget options
+        SUPPORTED_OPTIONS = ("set_min",
+                             "set_max",
+                             )
+        for option in WIDGET_OPTIONS:
+            if option in attributes:
+                if option in SUPPORTED_OPTIONS:
+                    widget_options[option] = attributes[option]
+                del attributes[option]
+
+        widget = S3CalendarWidget(**widget_options)
+
+    else:
+        # Drop all widget options
+        for option in WIDGET_OPTIONS:
+            attributes.pop(option, None)
+
+    attributes["widget"] = widget
+
+    # Default value
+    now = current.request.utcnow.date()
+    if attributes.get("default") == "now":
+        attributes["default"] = now
+
+    # Representation
+    if "represent" not in attributes:
+        attributes["represent"] = lambda dt: \
+                                  S3DateTime.date_represent(dt,
+                                                            utc=True,
+                                                            calendar=calendar,
+                                                            )
+
+    # Validator
+    if "requires" not in attributes:
+
         if past is None and future is None:
-            requires = IS_DATE(
-                    format=current.deployment_settings.get_L10n_date_format()
-                )
+            requires = IS_UTC_DATE(calendar=calendar)
         else:
-            now = current.request.utcnow.date()
-            current_month = now.month
-            if past is None:
-                future_month = now.month + future
-                if future_month <= 12:
-                    max = now.replace(month=future_month)
-                else:
-                    current_year = now.year
-                    years = int(future_month/12)
-                    future_year = current_year + years
-                    future_month = future_month - (years * 12)
-                    if future_month:
-                        max = now.replace(year=future_year,
-                                          month=future_month)
-                    else:
-                        max = now.replace(year=future_year)
-                requires = IS_DATE_IN_RANGE(
-                        format=current.deployment_settings.get_L10n_date_format(),
-                        maximum=max,
-                        error_message=current.T("Date must be %(max)s or earlier!")
-                    )
-            elif future is None:
-                if past < current_month:
-                    min = now.replace(month=current_month - past)
-                else:
-                    current_year = now.year
-                    past_years = int(past/12)
-                    past_months = past - (past_years * 12)
-                    past_month = current_month - past_months
-                    if past_month:
-                        min = now.replace(year=current_year - past_years,
-                                          month=past_month)
-                    else:
-                        min = now.replace(year=current_year - past_years)
-                requires = IS_DATE_IN_RANGE(
-                        format=current.deployment_settings.get_L10n_date_format(),
-                        minimum=min,
-                        error_message=current.T("Date must be %(min)s or later!")
-                    )
-            else:
-                future_month = now.month + future
-                if future_month <= 12:
-                    max = now.replace(month=future_month)
-                else:
-                    current_year = now.year
-                    years = int(future_month/12)
-                    future_year = now.year + years
-                    future_month = future_month - (years * 12)
-                    if future_month:
-                        max = now.replace(year=future_year,
-                                          month=future_month)
-                    else:
-                        max = now.replace(year=future_year)
-                if past < current_month:
-                    min = now.replace(month=current_month - past)
-                else:
-                    current_year = now.year
-                    past_years = int(past/12)
-                    past_months = past - (past_years * 12)
-                    past_month = current_month - past_months
-                    if past_month:
-                        min = now.replace(year=current_year - past_years,
-                                          month=past_month)
-                    else:
-                        min = now.replace(year=current_year - past_years)
-                requires = IS_DATE_IN_RANGE(
-                        format=current.deployment_settings.get_L10n_date_format(),
-                        maximum=max,
-                        minimum=min,
-                        error_message=current.T("Date must be between %(min)s and %(max)s!")
-                    )
-        if "empty" in attr:
-            if attr["empty"] is False:
-                attr["requires"] = requires
-            else:
-                attr["requires"] = IS_EMPTY_OR(requires)
-            del attr["empty"]
+            from dateutil.relativedelta import relativedelta
+            minimum = maximum = None
+            if past is not None:
+                minimum = now - relativedelta(months = past)
+            if future is not None:
+                maximum = now + relativedelta(months = future)
+            requires = IS_UTC_DATE(calendar=calendar,
+                                   minimum=minimum,
+                                   maximum=maximum,
+                                   )
+
+        empty = attributes.pop("empty", None)
+        if empty is False:
+            attributes["requires"] = requires
         else:
             # Default
-            attr["requires"] = IS_EMPTY_OR(requires)
-    if "widget" not in attr:
-        if past is None and future is None:
-            attr["widget"] = S3DateWidget()
-        elif past is None:
-            attr["widget"] = S3DateWidget(future=future)
-        elif future is None:
-            attr["widget"] = S3DateWidget(past=past)
-        else:
-            attr["widget"] = S3DateWidget(past=past, future=future)
+            attributes["requires"] = IS_EMPTY_OR(requires)
 
-    f = S3ReusableField(name, "date", **attr)
+    f = S3ReusableField(name, "date", **attributes)
     return f()
 
 # =============================================================================
 def s3_datetime(name="date", **attr):
     """
-        Return a standard Datetime field
+        Return a standard datetime field
 
-        Additional options to normal S3ReusableField:
-            default = "now" (in addition to usual meanings)
-            represent = "date" (in addition to usual meanings)
-            widget = "date" (in addition to usual meanings)
-            past = x hours
-            future = x hours
+        @param name: the field name
+
+        @keyword default: the field default, can be specified as "now" for
+                          current date/time, or as Python date
+
+        @keyword past: number of selectable past hours
+        @keyword future: number of selectable future hours
+
+        @keyword widget: form widget option, can be specified as "date"
+                         for date-only, or "datetime" for date+time (default),
+                         or as a web2py FormWidget
+        @keyword calendar: the calendar to use for this field, defaults
+                           to current.calendar
+        @keyword set_min: CSS selector for another date/time widget to
+                          dynamically set the minimum selectable date/time to
+                          the value selected in this widget
+        @keyword set_max: CSS selector for another date/time widget to
+                          dynamically set the maximum selectable date/time to
+                          the value selected in this widget
+
+        @note: other S3ReusableField keywords are also supported (in addition
+               to the above)
+
+        @note: sets a default field label "Date" => use label-keyword to
+               override if necessary
+        @note: sets a default validator IS_UTC_DATE/IS_UTC_DATETIME => use
+               requires-keyword to override if necessary
+        @note: sets a default representation S3DateTime.date_represent or
+               S3DateTime.datetime_represent respectively => use the
+               represent-keyword to override if necessary
+
+        @ToDo: Different default field name in case we need to start supporting
+               Oracle, where 'date' is a reserved word
     """
 
-    if "past" in attr:
-        past = attr["past"]
-        del attr["past"]
-    else:
-        past = None
-    if "future" in attr:
-        future = attr["future"]
-        del attr["future"]
-    else:
-        future = None
+    attributes = dict(attr)
 
-    if "default" in attr and attr["default"] == "now":
-        attr["default"] = current.request.utcnow
-    if "label" not in attr:
-        attr["label"] = current.T("Date")
-    if "represent" not in attr:
-        attr["represent"] = lambda dt: S3DateTime.datetime_represent(dt,
-                                                                     utc=True)
-    elif attr["represent"] == "date":
-        attr["represent"] = lambda dt: S3DateTime.date_represent(dt,
-                                                                 utc=True)
+    # Calendar
+    calendar = attributes.pop("calendar", None)
 
-    if "widget" not in attr:
-        if past is None and future is None:
-            attr["widget"] = S3DateTimeWidget()
-        elif past is None:
-            attr["widget"] = S3DateTimeWidget(future=future)
-        elif future is None:
-            attr["widget"] = S3DateTimeWidget(past=past)
-        else:
-            attr["widget"] = S3DateTimeWidget(past=past, future=future)
-    elif attr["widget"] == "date":
-        if past is None and future is None:
-            attr["widget"] = S3DateWidget()
-            requires = IS_DATE(
-                    format=current.deployment_settings.get_L10n_date_format()
-                )
-        else:
-            now = current.request.utcnow.date()
+    # Limits
+    limits = {}
+    for keyword in ("past", "future", "min", "max"):
+        if keyword in attributes:
+            limits[keyword] = attributes[keyword]
+            del attributes[keyword]
+
+    # Compute earliest/latest
+    widget = attributes.pop("widget", None)
+    now = current.request.utcnow
+    if widget == "date":
+        # Helper function to convert past/future hours into
+        # earliest/latest datetime, retaining day of month and
+        # time of day
+        def limit(delta):
             current_month = now.month
-            if past is None:
-                future = int(round(future/744.0, 0))
-                attr["widget"] = S3DateWidget(future=future)
-                future_month = now.month + future
-                if future_month <= 12:
-                    max = now.replace(month=future_month)
-                else:
-                    current_year = now.year
-                    years = int(future_month/12)
-                    future_year = current_year + years
-                    future_month = future_month - (years * 12)
-                    if future_month:
-                        max = now.replace(year=future_year,
-                                          month=future_month)
-                    else:
-                        max = now.replace(year=future_year)
-                requires = IS_DATE_IN_RANGE(
-                        format=current.deployment_settings.get_L10n_date_format(),
-                        maximum=max,
-                        error_message=current.T("Date must be %(max)s or earlier!")
-                    )
-            elif future is None:
-                past = int(round(past/744.0, 0))
-                attr["widget"] = S3DateWidget(past=past)
-                if past < current_month:
-                    min = now.replace(month=current_month - past)
-                else:
-                    current_year = now.year
-                    past_years = int(past/12)
-                    past_months = past - (past_years * 12)
-                    past_month = current_month - past_months
-                    if past_month:
-                        min = now.replace(year=current_year - past_years,
-                                          month=past_month)
-                    else:
-                        min = now.replace(year=current_year - past_years)
-                requires = IS_DATE_IN_RANGE(
-                        format=current.deployment_settings.get_L10n_date_format(),
-                        minimum=min,
-                        error_message=current.T("Date must be %(min)s or later!")
-                    )
-            else:
-                future = int(round(future/744.0, 0))
-                past = int(round(past/744.0, 0))
-                attr["widget"] = S3DateWidget(past=past, future=future)
-                future_month = now.month + future
-                if future_month <= 12:
-                    max = now.replace(month=future_month)
-                else:
-                    current_year = now.year
-                    years = int(future_month/12)
-                    future_year = now.year + years
-                    future_month = future_month - (years * 12)
-                    if future_month:
-                        max = now.replace(year=future_year,
-                                          month=future_month)
-                    else:
-                        max = now.replace(year=future_year)
-                if past < current_month:
-                    min = now.replace(month=current_month - past)
-                else:
-                    current_year = now.year
-                    past_years = int(past/12)
-                    past_months = past - (past_years * 12)
-                    past_month = current_month - past_months
-                    if past_month:
-                        min = now.replace(year=current_year - past_years,
-                                          month=past_month)
-                    else:
-                        min = now.replace(year=current_year - past_years)
-                requires = IS_DATE_IN_RANGE(
-                        format=current.deployment_settings.get_L10n_date_format(),
-                        maximum=max,
-                        minimum=min,
-                        error_message=current.T("Date must be between %(min)s and %(max)s!")
-                    )
-        if "empty" in attr:
-            if attr["empty"] is False:
-                attr["requires"] = requires
-            else:
-                attr["requires"] = IS_EMPTY_OR(requires)
-            del attr["empty"]
-        else:
-            # Default
-            attr["requires"] = IS_EMPTY_OR(requires)
+            years, hours = divmod(-delta, 8760)
+            months = divmod(hours, 744)[0]
+            if months > current_month:
+                years += 1
+            month = divmod((current_month - months) + 12, 12)[1]
+            year = now.year - years
+            return now.replace(month=month, year=year)
 
-    if "requires" not in attr:
-        if past is None and future is None:
-            requires = IS_UTC_DATETIME(
-                    format=current.deployment_settings.get_L10n_datetime_format()
-                )
-        else:
-            now = current.request.utcnow
-            if past is None:
-                max = now + datetime.timedelta(hours=future)
-                requires = IS_UTC_DATETIME(
-                        format=current.deployment_settings.get_L10n_datetime_format(),
-                        maximum=max,
-                        error_message=current.T("Date must be %(max)s or earlier!")
-                    )
-            elif future is None:
-                min = now - datetime.timedelta(hours=past)
-                requires = IS_UTC_DATETIME(
-                        format=current.deployment_settings.get_L10n_datetime_format(),
-                        minimum=min,
-                        error_message=current.T("Date must be %(min)s or later!")
-                    )
-            else:
-                min = now - datetime.timedelta(hours=past)
-                max = now + datetime.timedelta(hours=future)
-                requires = IS_UTC_DATETIME(
-                        format=current.deployment_settings.get_L10n_datetime_format(),
-                        maximum=max,
-                        minimum=min,
-                        error_message=current.T("Date must be between %(min)s and %(max)s!")
-                    )
-        if "empty" in attr:
-            if attr["empty"] is False:
-                attr["requires"] = requires
-            else:
-                attr["requires"] = IS_EMPTY_OR(requires)
-            del attr["empty"]
-        else:
-            # Default
-            attr["requires"] = IS_EMPTY_OR(requires)
+        earliest = limits.get("min")
+        if not earliest:
+            past = limits.get("past")
+            if past is not None:
+                earliest = limit(-past)
+        latest = limits.get("max")
+        if not latest:
+            future = limits.get("future")
+            if future is not None:
+                latest = limit(future)
+    else:
+        # Compute earliest/latest
+        earliest = limits.get("min")
+        if not earliest:
+            past = limits.get("past")
+            if past is not None:
+                earliest = now - datetime.timedelta(hours=past)
+        latest = limits.get("max")
+        if not latest:
+            future = limits.get("future")
+            if future is not None:
+                latest = now + datetime.timedelta(hours=future)
 
-    f = S3ReusableField(name, "datetime", **attr)
+    # Label
+    if "label" not in attributes:
+        attributes["label"] = current.T("Date")
+
+    # Widget
+    set_min = attributes.pop("set_min", None)
+    set_max = attributes.pop("set_max", None)
+    date_only = False
+    if widget == "date":
+        date_only = True
+        widget = S3CalendarWidget(calendar = calendar,
+                                  timepicker = False,
+                                  minimum = earliest,
+                                  maximum = latest,
+                                  set_min = set_min,
+                                  set_max = set_max,
+                                  )
+    elif widget is None or widget == "datetime":
+        widget = S3CalendarWidget(calendar = calendar,
+                                  timepicker = True,
+                                  minimum = earliest,
+                                  maximum = latest,
+                                  set_min = set_min,
+                                  set_max = set_max,
+                                  )
+    attributes["widget"] = widget
+
+    # Default value
+    if attributes.get("default") == "now":
+        attributes["default"] = now
+
+    # Representation
+    represent = attributes.pop("represent", None)
+    represent_method = None
+    if represent == "date" or represent is None and date_only:
+        represent_method = S3DateTime.date_represent
+    elif represent is None:
+        represent_method = S3DateTime.datetime_represent
+    if represent_method:
+        represent = lambda dt: represent_method(dt,
+                                                utc=True,
+                                                calendar=calendar,
+                                                )
+    attributes["represent"] = represent
+
+    # Validator and empty-option
+    if "requires" not in attributes:
+        if date_only:
+            validator = IS_UTC_DATE
+        else:
+            validator = IS_UTC_DATETIME
+        requires = validator(calendar=calendar,
+                             minimum=earliest,
+                             maximum=latest,
+                             )
+        empty = attributes.pop("empty", None)
+        if empty is False:
+            attributes["requires"] = requires
+        else:
+            attributes["requires"] = IS_EMPTY_OR(requires)
+
+    f = S3ReusableField(name, "datetime", **attributes)
     return f()
 
 # END =========================================================================

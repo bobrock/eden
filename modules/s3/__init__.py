@@ -11,7 +11,7 @@
 
     @requires: U{B{I{gluon}} <http://web2py.com>}
 
-    @copyright: 2009-2013 (c) Sahana Software Foundation
+    @copyright: 2009-2015 (c) Sahana Software Foundation
     @license: MIT
 
     Permission is hereby granted, free of charge, to any person
@@ -47,6 +47,7 @@ from s3validators import *
 from s3utils import *
 from s3widgets import *
 from s3data import *
+from s3datetime import *
 
 # Basic Toolkits ==============================================================
 #
@@ -63,12 +64,16 @@ from s3error import *
 # Asynchronous Tasks
 from s3task import *
 
+# Hierarchy Handling
+from s3hierarchy import *
+
 # Core Framework ==============================================================
 
 # Model Extensions
 from s3model import S3Model
 
 # Resource Framework
+from s3query import *
 from s3resource import *
 
 # Authentication, Authorization, Accounting
@@ -83,21 +88,26 @@ from s3rest import *
 from s3crud import *
 from s3forms import *
 
-# Search
-from s3search import *
+# Filtering
 from s3filter import *
 
 # Reporting
+from s3grouped import *
 from s3report import *
+from s3timeplot import *
 
 # Profiles
 from s3profile import *
+
+# Summary
+from s3summary import *
 
 # Synchronization
 from s3sync import *
 
 # Import
 from s3import import *
+from s3xforms import *
 
 # De-duplication
 from s3merge import S3Merge
@@ -115,6 +125,9 @@ from s3gis import *
 
 # Messaging
 from s3msg import *
+
+# Notifications
+from s3notify import *
 
 # GUI Navigation Framework
 from s3navigation import *

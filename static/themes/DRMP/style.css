@@ -1,388 +1,163 @@
+/* Stuff which is DRMP-specific */
+
 body {
-    font: 14px/21px 'Open Sans', sans-serif;
-    color: #666;
-    overflow-x: hidden;
-    background: url(img/bg_patch.jpg) #ebebeb;
+    padding-top: 90px;
 }
 
-body.popup {
-    background: #fff;
-    padding-top: 0;
+.navbar .brand {
+    width: 200px;
+    text-shadow: none;
+    color: #fff;
+    letter-spacing: 2px;
+    font-family: 'Lucida Grande', Lucida, Verdana, sans-serif;
+    margin-top: 0.4em;
 }
 
-/* Over-ride ext */
-p {
-    margin: 0 0 10px;
-}
-
-h1, h2, h3, h4, h5, h6 {
-    margin: 10px 0;
-}
-h1 {
-  font-size: 38.5px;
-}
-
-h2 {
-  font-size: 31.5px;
-}
-
-h3 {
-  font-size: 24.5px;
-}
-
-h4 {
-  font-size: 17.5px;
-}
-
-h5 {
-  font-size: 14px;
-}
-
-h6 {
-  font-size: 11.9px;
-}
-form {
-    margin: 0 0 20px;
-}
-
-/* Over-ride Footer */
-#footer {
-    border-top: 0;
-}
-
-/* Over-ride Bootstrap */
-
-.form-horizontal .map_wrapper {
-    margin-left: 20px;
-}
-
-/* Web2Py styles Inputs as x-largem, which don't match other form inputs */
-.input-xlarge {
-    -moz-box-sizing: inherit;
-    min-height: inherit;
-    width: 206px;
-}
-
-.tooltip {
-    opacity: 1;
-}
-
-/* Over-ride widgets */
-/*
-#dl-container {
-    clear: none;
-}*/
-div.dl {
-    border-bottom: 0;
-}
-.dl-row,
-.dl-item {
-    border-top: 0;
-    clear: none;
-}
-.dl-row.odd,
-.dl-row.odd .dl-item {
-    background-color: #FFF;
-}
-.dl-header {
-    display: none;
-}
-/* Override Bootstrap */
-.dl-2-cols {
-    margin-left: 0;
-}
-.dl-col-0 {
-    margin-right: 8px;
-}
-
-#cms_post_body.text.input-xlarge {
-    height: 100px;
-}
-
-#delete-btn {
-    margin-bottom: 0;
-}
-
-/* Match .btn.btn-primary */
-.delete-btn {
-    background-color: #006DCC;
-    border-color: rgba(0, 0, 0, 0.1) rgba(0, 0, 0, 0.1) rgba(0, 0, 0, 0.25);
-    border-width: 1px;
-    border-radius: 4px 4px 4px 4px;
-    color: #FFFFFF;
-    text-shadow: 0 -1px 0 rgba(0, 0, 0, 0.25);
-    line-height: 20px;
-    padding: 4px 12px;
-}
-
-/* Push down below Nav */
-#alert-space {
-    padding-top: 50px;
-}
-.alert.alert-success {
-    border: 1px solid #b2b2b2;
-}
-
-a.btn.btn-primary.main-add {
-    font-size: 15px;
-    float: right;
+a.brand img{
+    width: 60px;
     position: relative;
-    right: 13px;
-    top: 24px;
+    top: -13px;
 }
 
-/* Add button on Updates page & Disaster selection screen */
-a i.icon.icon-plus-sign.big-add:hover {
-    text-decoration: none;
+div.navbar .nav > li > a {
+    padding: 1.5em;
 }
 
-/* Modals */
-/* Imitate Bootstrap in jQueryUI Modal */
-#popup #submit_record__row {
-    text-align: right;
-}
-.ui-dialog-titlebar-close:after {
-    content: "x";
+#homepage-about h2 {
+    word-spacing: 61px;
 }
 
-.ui-dialog-titlebar {
-    text-align: center;
-    background-image: -webkit-gradient(linear,50% 0,50% 100%,color-stop(0%,#f9f9fa),color-stop(100%,#e0e2e8)) !important;
-    background-image: -webkit-linear-gradient(top,#f9f9fa,#e0e2e8) !important;
-    background-image: -moz-linear-gradient(top,#f9f9fa,#e0e2e8) !important;
-    background-image: -o-linear-gradient(top,#f9f9fa,#e0e2e8) !important;
-    background-image: -ms-linear-gradient(top,#f9f9fa,#e0e2e8) !important;
-    background-image: linear-gradient(top,#f9f9fa,#e0e2e8) !important;
+.export_xls {
+    background-image: url(img/icon-xls.png);
 }
 
-table.embeddedComponent {
-    border: 0;
-    display: inline-block;
-    margin-bottom: 10px;
-    margin-top: 1px;
-    border-radius: 4px;
-    -webkit-border-radius: 4px;
-    -moz-border-radius: 4px;
+/* Main Map */
+.map_legend_panel  .x-panel-body {
+    max-width: 200px;
 }
-
-#add-row-defaultevent_post td, 
-#add-row-filedocument td {
-    border: 0;
-    padding-left: 0;
-}
-
-#sub_defaultevent_post_defaultevent_post_i_event_id_edit_none,
-#sub_filedocument_filedocument_i_file_edit_none.upload {
-    padding-top: 6px;
-    padding-left: 4px;
-}
-
-#cms_post_body__row.control-group, 
-#cms_post_series_id__row.control-group,
-#cms_post_location_id__row.control-group,
-#cms_post_sub_filedocument__row.control-group {
-    margin-bottom: 5px;
-}
-
-#sub-filedocument table.embeddedComponent thead tr.label-row,
-#sub-defaultevent_post table.embeddedComponent thead tr.label-row {
+.gis_print_map-btn {
     display: none;
 }
 
-form.pr_person table.embeddedComponent td,
-#read-row-defaultevent_post-0 td {
-    border-style: none;
+#sub_filedocument_filedocument_i_file_edit_none,
+#sub_defaultevent_post_defaultevent_post_i_event_id_edit_none {
+    width: 206px !important;
+}
+
+#sub-defaultevent_post .label-row,
+#sub-defaultlocation .label-row,
+#sub-filedocument .label-row,
+#sub-partnerorganisation .label-row {
+    /* Hide the column titles since only 1 column
+        - this should be done server-side where-possible, but this isn't possible for Partner Orgs as same field as for Donors
+    */
+    display: none;
 }
 
 /* Contacts Page */
 
-#pr_person_sub_human_resourcehuman_resource__label {
-    display: none;
+/* Adjust Field Widths to match Titles/Data */
+#sub_human_resourcehuman_resource_human_resourcehuman_resource_i_organisation_id_edit_none {
+    width: 140px !important;
+}
+#sub_human_resourcehuman_resource_human_resourcehuman_resource_i_organisation_id_edit_0 {
+    width: 250px;
+}
+#sub_human_resourcehuman_resource_human_resourcehuman_resource_i_job_title_id_edit_none,
+#sub_human_resourcehuman_resource_human_resourcehuman_resource_i_job_title_id_edit_0,
+#sub_human_resourcehuman_resource_human_resourcehuman_resource_i_site_id_edit_none,
+#sub_human_resourcehuman_resource_human_resourcehuman_resource_i_site_id_edit_0 {
+    width: 120px;
+}
+#sub_phonecontact_phonecontact_i_value_edit_none,
+#sub_phonecontact_phonecontact_i_value_edit_0,
+#sub_emailcontact_emailcontact_i_value_edit_none,
+#sub_emailcontact_emailcontact_i_value_edit_0 {
+    width: 240px;
 }
 
-/*===========  Projects & Resources Page =====================*/
+/* Projects Page */
 
-#list-add div.form-container form.form-horizontal fieldset {
-    border: none;
+/* Dropdown with AddResourceLink takes up more vertical space than an INPUT so center the INPUTS
+    and the + button and throbber */
+
+#project_project_objectives,
+#project_project_description,
+#dummy_project_project_human_resource_id,
+#project_project_budget,
+#project_project_name,
+#project_project_organisation_id,
+#project_project_comments,
+#org_resource_comments  {
+    width: 300px !important;
+    padding: 4px;
 }
 
-/* Add New form */
-
-#list-add div.form-container form.form-horizontal {
-    background-color: #fff;
-    border: 1px solid #b2b2b2;
-    border-radius: 0 0 5px 5px;
-    position: relative;
-    padding-top: 7px;
-    padding-left: 9px;
-    top: 0;
+#project_project_objectives{
+    height: 100px;
+}
+ 
+#sub_donororganisation_donororganisation_i_amount_edit_none {
+    width: 60px !important;
+    margin-left: 5px;
+    margin-top: -1px;
+    padding: 4px;
+}
+#project_project_human_resource_id_mobile_phone,
+#project_project_human_resource_id_email,
+#project_project_human_resource_id_full_name,
+#project_project_start_date,
+#project_project_end_date,
+#sub_defaultlocation_defaultlocation_i_location_id_edit_none  {
+    width: 280px !important;
 }
 
-#submit_record__row {
-    margin-bottom: -24px;
-    margin-left: -18px;
-    margin-right: -15px;
-}
-
-#list-add h3 {
-    text-align: center;
-    border-bottom: solid 1px #c9ccd0;
-    border-radius: 5px 5px 0 0;
-    text-transform: uppercase;
-    font-size: 18px;
-    background: rgba(255,255,255,1);
-    background: -moz-linear-gradient(top, rgba(255,255,255,1) 0%, rgba(246,246,246,1) 47%, rgba(237,237,237,1) 100%);
-    background: -webkit-gradient(left top, left bottom, color-stop(0%, rgba(255,255,255,1)), color-stop(47%, rgba(246,246,246,1)), color-stop(100%, rgba(237,237,237,1)));
-    background: -webkit-linear-gradient(top, rgba(255,255,255,1) 0%, rgba(246,246,246,1) 47%, rgba(237,237,237,1) 100%);
-    background: -o-linear-gradient(top, rgba(255,255,255,1) 0%, rgba(246,246,246,1) 47%, rgba(237,237,237,1) 100%);
-    background: -ms-linear-gradient(top, rgba(255,255,255,1) 0%, rgba(246,246,246,1) 47%, rgba(237,237,237,1) 100%);
-    background: linear-gradient(to bottom, rgba(255,255,255,1) 0%, rgba(246,246,246,1) 47%, rgba(237,237,237,1) 100%);
-    filter: progid:DXImageTransform.Microsoft.gradient( startColorstr='#ffffff', endColorstr='#ededed', GradientType=0 );	-moz-box-shadow: 0 -1px 3px #d7d7d6;
-    -webkit-box-shadow: 0 -1px 3px #d7d7d6;
-    box-shadow: 0 -1px 3px #d7d7d6;
-    border: 1px solid #9e9b9b;
-    -moz-box-shadow: 0 1px 1px #aaaaa7;
-    -webkit-box-shadow: 0 1px 1px #aaaaa7;
-    box-shadow: 0 1px 1px #aaaaa7;
-    padding: 7px 6px;
-    margin-bottom: -6px;
-}
-
-#submit_record__row input.btn.btn-primary {
-    padding: 5px 20px;
-}
-
-/* Table Styling for Projects and Resources */
-
-table#datatable.dataTable.display {
-    background-color: #fff;
-}
-
-#datatable_wrapper {
-    background: rgba(255,255,255,1);
-    background: -moz-linear-gradient(top, rgba(255,255,255,1) 0%, rgba(246,246,246,1) 47%, rgba(237,237,237,1) 100%);
-    background: -webkit-gradient(left top, left bottom, color-stop(0%, rgba(255,255,255,1)), color-stop(47%, rgba(246,246,246,1)), color-stop(100%, rgba(237,237,237,1)));
-    background: -webkit-linear-gradient(top, rgba(255,255,255,1) 0%, rgba(246,246,246,1) 47%, rgba(237,237,237,1) 100%);
-    background: -o-linear-gradient(top, rgba(255,255,255,1) 0%, rgba(246,246,246,1) 47%, rgba(237,237,237,1) 100%);
-    background: -ms-linear-gradient(top, rgba(255,255,255,1) 0%, rgba(246,246,246,1) 47%, rgba(237,237,237,1) 100%);
-    background: linear-gradient(to bottom, rgba(255,255,255,1) 0%, rgba(246,246,246,1) 47%, rgba(237,237,237,1) 100%);
-    filter: progid:DXImageTransform.Microsoft.gradient( startColorstr='#ffffff', endColorstr='#ededed', GradientType=0 );	-moz-box-shadow: 0 -1px 3px #d7d7d6;
-    -webkit-box-shadow: 0 -1px 3px #d7d7d6;
-    box-shadow: 0 -1px 3px #d7d7d6;
-    border: 1px solid #9e9b9b;
-    -moz-box-shadow: 0 1px 1px #aaaaa7;
-    -webkit-box-shadow: 0 1px 1px #aaaaa7;
-    box-shadow: 0 1px 1px #aaaaa7;
-    border: 1px solid #b2b2b2;
-    border-radius: 5px;
-}
-
-#datatable_filter label {
-    position: relative;
-    padding-right: 25px;
-    margin-bottom: -37px;
-    margin-top: 13px;
-    font-weight: bold;
-}
-
-#datatable_length label select {
-    width: 75px;
-}
-
-#datatable_length label {
-    font-size: 12px;
-    margin-bottom: -1px;
-    margin-top: 2px;
-}
-
-#datatable_info.dataTables_info {
-    font-size: 12px;
-    padding-right: 15px;
-    color: #D35400;
-    line-height: 16px;
-}
-
-#datatable thead tr {
-    border: none;
-}
-
-#datatable tbody tr.odd {
-    background-color: #eeeeed;
-    padding-top: 5px;
-}
-
-#datatable tbody tr.odd td.sorting_1 {
-    background-color: rgba(51, 151, 219, 0.35);
-    color: #222220;
-}
-
-#datatable tbody tr.even td.sorting_1 {
-    background-color: rgba(51, 151, 219, 0.17);
-    color: #222220;
-}
-
-#table-container tr.even td,
-#table-container tr.odd td {
-    border: 1px solid #d9d8d8;
-    border-left: none;
-    padding: 10px 10px 10px 7px;
-    font-size: 13px;
-}
-
-#table-container th {
-    border: 1px solid #d9d8d8;
-    border-left: none;
-    font-size: 13px;
-}
-
-h2 {
-    font-size: 30px;
-    text-shadow: 1px 0 2px #ffffff;
-}
-
-/* Project & Resource Read Screen */
-
-form.form-horizontal {  /*temporary we need to pass another class to the form so I can style it without problems*/
-    background-color: #fff;
-    border: 1px solid #b2b2b2;
-    border-radius: 5px;
-    position: relative;
-    top: 11px;
-    padding-top: 7px;
-    padding-left: 9px;
-}
-
-#last_update {
-	color: #D35400;
-}
-
-#markDuplicate {
-    padding-bottom: 0;
-}
-
-#project_project_name__row.control-group {
-    margin-bottom: 15px;
-    text-align: left;
-    width: 100%;
-    font-size: 24px;
+#project_project_sub_partnerorganisation__row {
     margin-top: 15px;
 }
 
-form.form-horizontal.project_project fieldset div#project_project_name__row div.controls {
-    background: #fff !important;
-    margin: 0px 0px 0px 24px;
-    border: none;
-    box-shadow:none;
-    padding-top: 0px;
-    padding-right: 0px;
-    padding-bottom: 0px;
+#sub_donororganisation_donororganisation_i_currency_edit_none,
+#sub_donororganisation_donororganisation_i_currency_edit_0,
+#sub_donororganisation_donororganisation_i_amount_edit_none,
+#sub_donororganisation_donororganisation_i_amount_edit_0,
+#add-partnerorganisation-none,
+#add-donororganisation-none,
+#throbber-partnerorganisation-none,
+#throbber-donororganisation-none {
+    position: relative;
+    top: -13px;
+    
 }
 
-#project_project_name {
-    margin-left: 20px;
+/* Adjust Field Widths to match Titles/Data */
+
+#project_project_human_resource_id_organisation_id,
+#sub_partnerorganisation_partnerorganisation_i_organisation_id_edit_none,
+#sub_partnerorganisation_partnerorganisation_i_organisation_id_edit_0,
+#sub_donororganisation_donororganisation_i_organisation_id_edit_none,
+#sub_donororganisation_donororganisation_i_organisation_id_edit_0 {
+    width: 280px;
 }
 
-#project_project_name__row div.controls {
+#sub_donororganisation_donororganisation_i_organisation_id_edit_none {
+    width: 150px;
+}
+
+#sub_donororganisation_donororganisation_i_amount_edit_none,
+#sub_donororganisation_donororganisation_i_amount_edit_0 {
+    width: 220px;
+}
+#sub_donororganisation_donororganisation_i_currency_edit_none,
+#sub_donororganisation_donororganisation_i_currency_edit_0 {
+    width: 70px;
+}
+
+/* For Read view, make the name into a Title */
+.item-container #project_project_name__row.control-group {
+    margin-bottom: 15px;
+    margin-top: 15px;
+}
+.item-container #project_project_name__row .controls {
     text-align: left;
     border-bottom: solid 1px #c9ccd0;
     border-radius: 5px 5px 0 0;
@@ -402,246 +177,14 @@ form.form-horizontal.project_project fieldset div#project_project_name__row div.
     margin: -23px -1px 4px -10px;
     padding: 7px 6px 7px 25px;
 }
-
-#project_project_organisation_id__row, 
-#project_project_sub_defaultlocation__row,
-#project_project_human_resource_id__row, 
-#project_project_start_date__row, 
-#project_project_end_date__row, 
-#project_project_sub_partnerorganisation__row, 
-#project_project_sub_donororganisation__row, 
-#project_project_budget__row {
-    margin-bottom: 5px;
-}
-
-#project_project_name__label,
-#project_project_organisation_id__label,
-#project_project_sub_defaultlocation__label,
-#project_project_human_resource_id__label,
-#project_project_start_date__label,
-#project_project_end_date__label,
-#project_project_sub_partnerorganisation__label,
-#project_project_sub_donororganisation__label,
-#project_project_budget__label,
-#project_project_comments__label {
-    padding-top: 0;
-    font-weight: bold;
-}
-
-#org_resource_organisation_id__row,
-#org_resource_location_id__row,
-#org_resource_resource_type_id__row,
-#org_resource_quantity__row {
-    margin-bottom: 5px;
-}
-
-#org_resource_organisation_id__label,
-#org_resource_location_id__label,
-#org_resource_resource_type_id__label,
-#org_resource_quantity__label,
-#org_resource_comments__label {
-    padding-top: 0;
-    font-weight: bold;
-}
-
-b.red {
+.item-container #project_project_name__label {
     display: none;
 }
 
-/* Add new Project form styling */
-
-#sub-partnerorganisation table.embeddedComponent thead,
-#sub-defaultlocation table.embeddedComponent thead tr.label-row td {
-    display: none;
-}
-
-#resource_type_add,
-#sub_donororganisation_donororganisation_i_organisation_id_edit_none_organisation_add, 
-#sub_partnerorganisation_partnerorganisation_i_organisation_id_edit_none_organisation_add, 
-#sub_defaultlocation_defaultlocation_i_location_id_edit_none_location_add,
-#organisation_add,
-#staff_add  {
-    padding-left: 0;
-    font-size: 11px;
-}
-
-#add-row-defaultlocation td {
-    border-bottom: none;
-    padding-left: 0;
-}
-#add-row-donororganisation td,
-#add-row-partnerorganisation td,
-#sub-donororganisation table.embeddedComponent thead td {
-    border: none;
-    padding: 0 5px 0 0;
-}
-
-#sub_donororganisation_donororganisation_i_currency_edit_none,
-#sub_donororganisation_donororganisation_i_amount_edit_none {
-    position: relative;
-    top: -5px;
-}
-
-#sub_donororganisation_donororganisation_i_amount_edit_none {
-    width: 200px;
-}
-#sub_donororganisation_donororganisation_i_currency_edit_none {
-    width: 70px;
-}
-
-#sub_donororganisation_donororganisation_i_organisation_id_edit_none {
-    position: relative;
-    top: 5px;
-    margin-bottom: 5px;
-}
-
-#sub-donororganisation table.embeddedComponent thead td label {
-    font-size: 12px;
-    color: #7b7b77;
-}
-
-#delete-btn, 
-#edit-btn.btn.btn-primary,
-#show-add-btn {
-    padding: 1px 6px;
-    font-size: 10.5px;
-    -webkit-border-radius: 3px;
-       -moz-border-radius: 3px;
-            border-radius: 3px;
-}
-
-a.action-btn {
-    display: inline-block;
-    *display: inline;
-    padding: 1px 6px;
-    margin-bottom: 0;
-    *margin-left: .3em;
-    margin-right: -2px;
-    font-size: 10.5px;
-    line-height: 20px;
-    *line-height: 20px;
-    color: #333333;
-    text-align: center;
-    text-shadow: 0 1px 1px rgba(255, 255, 255, 0.75);
-    vertical-align: middle;
-    cursor: pointer;
-    background-color: #f5f5f5;
-    *background-color: #e6e6e6;
-    background-image: -moz-linear-gradient(top, #ffffff, #e6e6e6);
-    background-image: -webkit-gradient(linear, 0 0, 0 100%, from(#ffffff), to(#e6e6e6));
-    background-image: -webkit-linear-gradient(top, #ffffff, #e6e6e6);
-    background-image: -o-linear-gradient(top, #ffffff, #e6e6e6);
-    background-image: linear-gradient(to bottom, #ffffff, #e6e6e6);
-    background-repeat: repeat-x;
-    border: 1px solid #bbbbbb;
-    *border: 0;
-    border-color: #e6e6e6 #e6e6e6 #bfbfbf;
-    border-color: rgba(0, 0, 0, 0.1) rgba(0, 0, 0, 0.1) rgba(0, 0, 0, 0.25);
-    border-bottom-color: #a2a2a2;
-    -webkit-border-radius: 4px;
-     -moz-border-radius: 4px;
-          border-radius: 4px;
-    filter: progid:DXImageTransform.Microsoft.gradient(startColorstr='#ffffffff', endColorstr='#ffe6e6e6', GradientType=0);
-    filter: progid:DXImageTransform.Microsoft.gradient(enabled=false);
-    *zoom: 1;
-    -webkit-box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.2), 0 1px 2px rgba(0, 0, 0, 0.05);
-     -moz-box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.2), 0 1px 2px rgba(0, 0, 0, 0.05);
-          box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.2), 0 1px 2px rgba(0, 0, 0, 0.05);
-}
- 
-a.action-btn:hover {
-    color: #333333;
-    text-decoration: none;
-    background-color: #e6e6e6;
-    *background-color: #d9d9d9;
-    /* Buttons in IE7 don't get borders, so darken on hover */
-    background-position: 0 -15px;
-    -webkit-transition: background-position 0.1s linear;
-     -moz-transition: background-position 0.1s linear;
-       -o-transition: background-position 0.1s linear;
-          transition: background-position 0.1s linear;
-}
-
-#delete-btn {
-    color: #ffffff;
-    text-shadow: 0 -1px 0 rgba(0, 0, 0, 0.25);
-    background-color: #da4f49;
-    *background-color: #bd362f;
-    background-image: -moz-linear-gradient(top, #ee5f5b, #bd362f);
-    background-image: -webkit-gradient(linear, 0 0, 0 100%, from(#ee5f5b), to(#bd362f));
-    background-image: -webkit-linear-gradient(top, #ee5f5b, #bd362f);
-    background-image: -o-linear-gradient(top, #ee5f5b, #bd362f);
-    background-image: linear-gradient(to bottom, #ee5f5b, #bd362f);
-    background-repeat: repeat-x;
-    border-color: #bd362f #bd362f #802420;
-    border-color: rgba(0, 0, 0, 0.1) rgba(0, 0, 0, 0.1) rgba(0, 0, 0, 0.25);
-    filter: progid:DXImageTransform.Microsoft.gradient(startColorstr='#ffee5f5b', endColorstr='#ffbd362f', GradientType=0);
-    filter: progid:DXImageTransform.Microsoft.gradient(enabled=false);
-}
-
-#delete-btn:hover{
-    color: #ffffff;
-    background-color: #bd362f;
-    *background-color: #a9302a;
-}
-
-/* Login & Registration Screens */
-#home div.form-container form {
+/* Subscriptions Page */
+#subscription-form.form-horizontal {
+    border: 1px solid #b2b2b2;
+    width: 400px;
     margin-left: auto;
     margin-right: auto;
-    width: 450px;
-    padding: 20px;
-    background-color: #fff;
-    margin-bottom: 20px;
-    border-radius: 4px;
-    border: 1px solid #9e9b9b;
-    -moz-box-shadow: 0 -1px 3px #d7d7d6;
-    -webkit-box-shadow: 0 -1px 3px #d7d7d6;
-    box-shadow: 0 -1px 3px #d7d7d6;
-    -moz-box-shadow: 0 1px 1px #aaaaa7;
-    -webkit-box-shadow: 0 1px 1px #aaaaa7;
-    box-shadow: 0 1px 1px #aaaaa7;
-}
-
-#home h2 {
-    width: 480px;
-    margin-left: auto;
-    margin-right: auto;
-}
-
-#auth_user_password,
-#auth_user_password_two,
-#auth_user_email {
-    width: 100%;
-    margin-left: 10px;
-    margin-bottom: 10px;
-}
-
-#auth_user_remember__row td.w2p_fw div label {
-    width: 80%;
-    margin-left: 30px;
-    margin-top: -19px;
-    margin-bottom: 10px;
-}
-
-/* Registration Screen */
-#auth_user_first_name,
-#auth_user_last_name,
-#auth_user_utc_offset {
-    width: 100%;
-    margin-left: 10px;
-    margin-bottom: 10px;
-}
-
-#auth_user_organisation_id {
-    margin-left: 10px;
-}
-
-#auth_user_utc_offset__row td.w2p_fc div.tooltip {
-    margin-left: 15px;
-}
-
-#submit_record__row td.w2p_fw {
-    padding-top: 15px;
-    padding-left: 12px;
 }

@@ -1,5 +1,5 @@
 /**
- * Copyright (c) 2008-2011 The Open Source Geospatial Foundation
+ * Copyright (c) 2008-2012 The Open Source Geospatial Foundation
  *
  * Published under the BSD license.
  * See http://svn.geoext.org/core/trunk/geoext/license.txt for the full text
@@ -50,7 +50,7 @@ GeoExt.data.AttributeStoreMixin = function() {
                     reader: new GeoExt.data.AttributeReader(
                         c, c.fields || ["name", "type", "restriction", {
                             name: "nillable", type: "boolean"
-                        }]
+                        }, "annotation"]
                     )
                 })
             );
@@ -121,22 +121,25 @@ GeoExt.data.AttributeStoreMixin = function() {
         updateFeature: function(records) {
             var feature = this.feature, layer = feature.layer;
             var i, len, record, name, value, oldValue, dirty;
-            for(i=0,len=records.length; i<len; i++) {
+            for (i=0,len=records.length; i<len; i++) {
                 record = records[i];
                 name = record.get("name");
                 value = record.get("value");
                 oldValue = feature.attributes[name];
-                if(oldValue !== value) {
+                if (oldValue !== value) {
                     dirty = true;
                 }
             }
-            if(dirty && layer && layer.events &&
+            if (dirty && layer && layer.events &&
                         layer.events.triggerEvent("beforefeaturemodified",
                             {feature: feature}) !== false) {
-                for(i=0,len=records.length; i<len; i++) {
+                for (i=0,len=records.length; i<len; i++) {
                     record = records[i];
                     name = record.get("name");
                     value = record.get("value");
+                    if (record.get("type") == 'xsd:date' && value instanceof Date) {
+                        value = value.format('Y-m-d');
+                    }
                     feature.attributes[name] = value;
                 }
                 layer.events.triggerEvent(

@@ -1,5 +1,5 @@
 /**
- * Copyright (c) 2008-2011 The Open Source Geospatial Foundation
+ * Copyright (c) 2008-2012 The Open Source Geospatial Foundation
  * 
  * Published under the BSD license.
  * See http://svn.geoext.org/core/trunk/geoext/license.txt for the full text
@@ -30,7 +30,7 @@ GeoExt.form.toFilter = function(form, logicalOp, wildcard) {
         form = form.getForm();
     }
     var filters = [], values = form.getValues(false);
-    for(var prop in values) {
+    for (var prop in values) {
         var s = prop.split("__");
 
         var value = values[prop], type;
@@ -108,6 +108,9 @@ GeoExt.form.CONTAINS = 3;
  *  * labelTpl - ``Ext.Template`` or ``String`` or ``Array`` If set, 
  *  the field label is obtained by applying the record's data hash to this 
  *  template. This allows for very customizable field labels. 
+ *  * minTextAreaMaxLength - ``Number`` If this record's maxlength is greater
+ *  than this value, then a textarea is returned instead of a simple textfield.
+ *  Only applies if record is of type 'text'.
  *  See for instance :
  *
  *  .. code-block:: javascript
@@ -185,24 +188,42 @@ GeoExt.form.recordToField = function(record, options) {
 
     var r = GeoExt.form.recordToField.REGEXES;
 
-    if(type.match(r["text"])) {
+    if (restriction.enumeration) {
+        field = Ext.apply({
+            xtype: "combo",
+            fieldLabel: label,
+            mode: "local",
+            forceSelection: true,
+            triggerAction: "all",
+            editable: false,
+            store: restriction.enumeration
+        }, baseOptions);
+    } else if(type.match(r["text"])) {
         var maxLength = restriction["maxLength"] !== undefined ?
             parseFloat(restriction["maxLength"]) : undefined;
         var minLength = restriction["minLength"] !== undefined ?
             parseFloat(restriction["minLength"]) : undefined;
+
+        var xtype = maxLength >= options.minTextAreaMaxLength ?
+            "textarea" : "textfield";
+
         field = Ext.apply({
-            xtype: "textfield",
+            xtype: xtype,
             fieldLabel: label,
             maxLength: maxLength,
             minLength: minLength
         }, baseOptions);
-    } else if(type.match(r["number"])) {
+    } else if(type.match(r["int"]) || type.match(r["float"])) {
         var maxValue = restriction["maxInclusive"] !== undefined ?
             parseFloat(restriction["maxInclusive"]) : undefined;
         var minValue = restriction["minInclusive"] !== undefined ?
             parseFloat(restriction["minInclusive"]) : undefined;
         field = Ext.apply({
-            xtype: "numberfield",
+            xtype: nillable ? "numberornullfield" : "numberfield",
+            allowDecimals: r["float"].test(type),
+            // to prevent arbitrary precision to be enforced:
+            decimalPrecision: -1,
+            allowNegative: !r["positive"].test(type),
             fieldLabel: label,
             maxValue: maxValue,
             minValue: minValue
@@ -217,7 +238,7 @@ GeoExt.form.recordToField = function(record, options) {
         field = Ext.apply({
             xtype: "datefield",
             fieldLabel: label,
-            format: 'c'
+            format: type == 'date' ? 'Y-m-d' : 'c'
         }, baseOptions);
     }
 
@@ -230,10 +251,20 @@ GeoExt.form.recordToField = function(record, options) {
   */
 GeoExt.form.recordToField.REGEXES = {
     "text": new RegExp(
-        "^(text|string)$", "i"
+        "^(string|text|character)$", "i"
+        // "text" and "character" are not valid XML schema data types
+        // but MapServer may advertise strings as such.
     ),
-    "number": new RegExp(
-        "^(number|float|decimal|double|int|long|integer|short)$", "i"
+    "int": new RegExp(
+        "^(integer|long|int|short|byte|nonPositiveInteger|negativeInteger|nonNegativeInteger|positiveInteger|unsignedLong|unsignedInt|unsignedShort|unsignedByte)$", "i"
+    ),
+    "float": new RegExp(
+        "^(float|double|decimal|number|real)$", "i"
+        // "number" and "real" are not valid XML schema data types
+        // but MapServer may advertise floats as such.
+    ),
+    "positive": new RegExp(
+        "^(nonNegativeInteger|positiveInteger|unsignedLong|unsignedInt|unsignedShort|unsignedByte)$", "i"
     ),
     "boolean": new RegExp(
         "^(boolean)$", "i"
@@ -242,3 +273,12 @@ GeoExt.form.recordToField.REGEXES = {
         "^(date|dateTime)$", "i"
     )
 };
+
+GeoExt.form.NumberOrNullField = Ext.extend(Ext.form.NumberField, {
+    getValue: function() {
+        value = GeoExt.form.NumberOrNullField.superclass.
+                getValue.apply(this, arguments);
+        return value === "" ? null : value;
+    }
+});
+Ext.reg('numberornullfield', GeoExt.form.NumberOrNullField);

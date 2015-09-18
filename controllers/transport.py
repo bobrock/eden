@@ -26,13 +26,16 @@ def airport():
 
         if r.interactive:
             if r.component:
-                # remove CRUD generated buttons in the tabs
-                s3db.configure("inv_inv_item",
-                               create=False,
-                               listadd=False,
-                               editable=False,
-                               deletable=False,
-                               )
+                if r.component.name == "human_resource":
+                    s3db.org_site_staff_config(r)
+                elif r.component.name == "inv_item":
+                    # remove CRUD generated buttons in the tabs
+                    s3db.configure("inv_inv_item",
+                                   create = False,
+                                   deletable = False,
+                                   editable = False,
+                                   listadd = False,
+                                   )
             elif r.method == "update":
                 field = r.table.obsolete
                 field.readable = field.writable = True
@@ -52,13 +55,16 @@ def heliport():
 
         if r.interactive:
             if r.component:
-                # remove CRUD generated buttons in the tabs
-                s3db.configure("inv_inv_item",
-                               create=False,
-                               listadd=False,
-                               editable=False,
-                               deletable=False,
-                               )
+                if r.component.name == "human_resource":
+                    s3db.org_site_staff_config(r)
+                elif r.component.name == "inv_item":
+                    # remove CRUD generated buttons in the tabs
+                    s3db.configure("inv_inv_item",
+                                   create = False,
+                                   deletable = False,
+                                   editable = False,
+                                   listadd = False,
+                                   )
             elif r.method == "update":
                 field = r.table.obsolete
                 field.readable = field.writable = True
@@ -78,13 +84,16 @@ def seaport():
 
         if r.interactive:
             if r.component:
-                # remove CRUD generated buttons in the tabs
-                s3db.configure("inv_inv_item",
-                               create=False,
-                               listadd=False,
-                               editable=False,
-                               deletable=False,
-                               )
+                if r.component.name == "human_resource":
+                    s3db.org_site_staff_config(r)
+                elif r.component.name == "inv_item":
+                    # remove CRUD generated buttons in the tabs
+                    s3db.configure("inv_inv_item",
+                                   create = False,
+                                   deletable = False,
+                                   editable = False,
+                                   listadd = False,
+                                   )
             elif r.method == "update":
                 field = r.table.obsolete
                 field.readable = field.writable = True
@@ -114,5 +123,22 @@ def transport_rheader(r, tabs=[]):
     rheader_fields = [["name"], ["location_id"]]
     rheader = S3ResourceHeader(rheader_fields, tabs)(r)
     return rheader
+
+# -----------------------------------------------------------------------------
+def incoming():
+    """
+        Incoming Shipments for Sites
+
+        Used from Requests rheader when looking at Transport Status
+    """
+
+    # @ToDo: Create this function!
+    return s3db.inv_incoming()
+
+# -----------------------------------------------------------------------------
+def req_match():
+    """ Match Requests """
+
+    return s3db.req_match(rheader=transport_rheader)
 
 # END =========================================================================

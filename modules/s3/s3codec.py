@@ -2,7 +2,7 @@
 
 """ S3 Encoder/Decoder Base Class
 
-    @copyright: 2011-13 (c) Sahana Software Foundation
+    @copyright: 2011-15 (c) Sahana Software Foundation
     @license: MIT
 
     Permission is hereby granted, free of charge, to any person
@@ -27,17 +27,7 @@
     OTHER DEALINGS IN THE SOFTWARE.
 """
 
-__all__ = ["S3Codec"]
-
-import datetime
-try:
-    import dateutil
-    import dateutil.parser
-    import dateutil.tz
-except ImportError:
-    import sys
-    print >> sys.stderr, "ERROR: python-dateutil module needed for date handling"
-    raise
+__all__ = ("S3Codec",)
 
 try:
     import json # try stdlib (Python 2.6)
@@ -52,14 +42,14 @@ from xml.sax.saxutils import escape, unescape
 from gluon import current
 from gluon.storage import Storage
 
+from s3utils import s3_unicode
+
 # =============================================================================
 class S3Codec(object):
     """
         Base class for converting S3Resources into/from external
         data formats, for use with S3Importer/S3Exporter
     """
-
-    ISOFORMAT = "%Y-%m-%dT%H:%M:%S" #: universal timestamp
 
     # A list of fields which should be skipped from PDF/XLS exports
     indices = ["id", "pe_id", "site_id", "sit_id", "item_entity_id"]
@@ -69,14 +59,16 @@ class S3Codec(object):
     def get_codec(format):
 
         # Import the codec classes
-        from codecs import S3SHP
-        from codecs import S3XLS
-        from codecs import S3RL_PDF
+        from s3codecs import S3SHP
+        from s3codecs import S3SVG
+        from s3codecs import S3XLS
+        from s3codecs import S3RL_PDF
 
         # Register the codec classes
         CODECS = Storage(
             pdf = S3RL_PDF,
             shp = S3SHP,
+            svg = S3SVG,
             xls = S3XLS,
         )
 
@@ -97,7 +89,7 @@ class S3Codec(object):
             @param resource: the S3Resource
             @param source: the source
 
-            @returns: an S3XML ElementTree
+            @return: an S3XML ElementTree
         """
         raise NotImplementedError
 
@@ -108,7 +100,7 @@ class S3Codec(object):
 
             @param resource: the S3Resource
 
-            @returns: a handle to the output
+            @return: a handle to the output
         """
         raise NotImplementedError
 
@@ -139,75 +131,6 @@ class S3Codec(object):
         if s:
             s = unescape(s, cls.XML2PY)
         return s
-
-    #--------------------------------------------------------------------------
-    @staticmethod
-    def decode_iso_datetime(dtstr):
-        """
-            Convert date/time string in ISO-8601 format into a
-            datetime object
-
-            @note: this routine is named "iso" for consistency reasons,
-                   but can actually read a broad variety of datetime
-                   formats, but may raise a ValueError where not
-
-            @param dtstr: the date/time string
-        """
-        DEFAULT = datetime.datetime.utcnow()
-        dt = dateutil.parser.parse(dtstr, default=DEFAULT)
-        if dt.tzinfo is None:
-            try:
-                dt = dateutil.parser.parse(dtstr + " +0000",
-                                           default=DEFAULT)
-            except:
-                # time part missing?
-                dt = dateutil.parser.parse(dtstr + " 00:00 +0000",
-                                           default=DEFAULT)
-        return dt
-
-    #--------------------------------------------------------------------------
-    @staticmethod
-    def as_utc(dt):
-        """
-            Get a datetime object for the same date/time as the
-            datetime object, but in UTC
-
-            @param dt: the datetime object
-        """
-        if dt:
-            if dt.tzinfo is None:
-                return dt.replace(tzinfo=dateutil.tz.tzutc())
-            return dt.astimezone(dateutil.tz.tzutc())
-        else:
-            return None
-
-    #--------------------------------------------------------------------------
-    @staticmethod
-    def encode_iso_datetime(dt):
-        """
-            Convert a datetime object into a ISO-8601 formatted
-            string, omitting microseconds
-
-            @param dt: the datetime object
-        """
-        dx = dt - datetime.timedelta(microseconds=dt.microsecond)
-        return dx.isoformat()
-
-    #--------------------------------------------------------------------------
-    @staticmethod
-    def encode_local_datetime(dt, fmt=None):
-        """
-            Convert a datetime object into a local date/time formatted
-            string, omitting microseconds
-
-            @param dt: the datetime object
-        """
-        if fmt is None:
-            format = current.deployment_settings.get_L10n_datetime_format()
-        else:
-            format = fmt
-        dx = dt - datetime.timedelta(microseconds=dt.microsecond)
-        return dx.strftime(str(format))
 
     # -------------------------------------------------------------------------
     @staticmethod
@@ -256,7 +179,7 @@ class S3Codec(object):
 
         tree = kwargs.get("tree", None)
         if message:
-            output["message"] = unicode(message)
+            output["message"] = s3_unicode(message)
         for k, v in kwargs.items():
             if k != "tree":
                 output[k] = v

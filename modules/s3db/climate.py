@@ -2,7 +2,7 @@
 
 """ Sahana Eden Climate Model
 
-    @copyright: 2011-2013 (c) Sahana Software Foundation
+    @copyright: 2011-2015 (c) Sahana Software Foundation
     @license: MIT
 
     Permission is hereby granted, free of charge, to any person
@@ -27,9 +27,9 @@
     OTHER DEALINGS IN THE SOFTWARE.
 """
 
-__all__ = ["S3ClimateModel",
+__all__ = ("S3ClimateModel",
            "climate_first_run",
-           ]
+           )
 
 from gluon import *
 from gluon.storage import Storage
@@ -55,7 +55,7 @@ class S3ClimateModel(S3Model):
         @ToDo: Deprecate raw SQL (Tested only on PostgreSQL)
     """
 
-    names = ["climate_place",
+    names = ("climate_place",
              "climate_place_elevation",
              "climate_place_station_name",
              "climate_place_station_id",
@@ -65,7 +65,7 @@ class S3ClimateModel(S3Model):
              "climate_prices",
              "climate_purchase",
              "climate_save_query",
-             ]
+             )
 
     def model(self):
 
@@ -115,14 +115,14 @@ class S3ClimateModel(S3Model):
         # not all places are stations with elevations
         # as in the case of "gridded" data
         # a station can only be in one place
-        table = define_table("climate_place_station_name",
-                             Field("name", "double",
-                                   notnull=True,
-                                   required=True,
-                                  ),
-                            )
+        define_table("climate_place_station_name",
+                     Field("name", "double",
+                           notnull=True,
+                           required=True,
+                           ),
+                     )
 
-        station_id = S3ReusableField("station_id", table,
+        station_id = S3ReusableField("station_id", "reference %s" % tablename,
                                      sortby="name",
                                      requires = IS_ONE_OF(db,
                                         "climate_place_station_name.id",
@@ -153,39 +153,39 @@ class S3ClimateModel(S3Model):
         # rainfall (mm), temp (K) are ok
         # output units
 
-        table = define_table("climate_sample_table_spec",
-                             Field("name",
-                                   notnull=True,
-                                   required=True,
-                                  ),
-                             Field("sample_type_code",
-                                   length = 1,
-                                   notnull = True,
-                                   # web2py requires a default value for not null fields
-                                   default = "",
-                                   required = True
-                                  ),
-                             Field("field_type",
-                                   notnull=True,
-                                   required=True,
-                                  ),
-                             Field("units",
-                                   notnull=True,
-                                   required=True,
-                                  ),
-                             Field("date_mapping",
-                                   default="",
-                                   notnull=True,
-                                   required=True
-                                  ),
-                             Field("grid_size", "double",
-                                   default = 0,
-                                   notnull = True,
-                                   required = True
-                                  )
-                            )
+        define_table("climate_sample_table_spec",
+                     Field("name",
+                           notnull=True,
+                           required=True,
+                           ),
+                     Field("sample_type_code",
+                           length = 1,
+                           notnull = True,
+                           # web2py requires a default value for not null fields
+                           default = "",
+                           required = True
+                           ),
+                     Field("field_type",
+                           notnull=True,
+                           required=True,
+                           ),
+                     Field("units",
+                           notnull=True,
+                           required=True,
+                           ),
+                     Field("date_mapping",
+                           default="",
+                           notnull=True,
+                           required=True
+                           ),
+                     Field("grid_size", "double",
+                           default = 0,
+                           notnull = True,
+                           required = True
+                           )
+                     )
 
-        parameter_id = S3ReusableField("parameter_id", table,
+        parameter_id = S3ReusableField("parameter_id", "reference %s" % tablename,
                                        sortby="name",
                                        requires = IS_ONE_OF(db,
                                                 "climate_sample_table_spec.id",
@@ -216,34 +216,32 @@ class S3ClimateModel(S3Model):
         # Station Parameters
         #
         tablename = "climate_station_parameter"
-        table = define_table(tablename,
-                             station_id(),
-                             parameter_id(
-                                requires = IS_ONE_OF(db,
-                                    "climate_sample_table_spec.id",
-                                    sample_table_spec_represent,
-                                    sort=True
-                                ),
-                             ),
-                            )
+        define_table(tablename,
+                     station_id(),
+                     parameter_id(requires = IS_ONE_OF(db,
+                                             "climate_sample_table_spec.id",
+                                             sample_table_spec_represent,
+                                             sort=True
+                                             ),
+                                  ),
+                     Field.Method("range_from",
+                                  climate_station_parameter_range_from),
+                     Field.Method("range_to",
+                                  climate_station_parameter_range_to),
+                     )
 
         ADD = T("Add new Station Parameter")
         crud_strings[tablename] = Storage(
-            title_create = ADD,
+            label_create = ADD,
             title_display = T("Station Parameter Details"),
             title_list = T("Station Parameters"),
             title_update = T("Edit Station Parameter"),
-            title_search = T("Search Station Parameters"),
-            subtitle_create = ADD,
             label_list_button = T("List Station Parameters"),
-            label_create_button = ADD,
             label_delete_button = T("Remove Station Parameter"),
             msg_record_created = T("Station Parameter added"),
             msg_record_modified = T("Station Parameter updated"),
             msg_record_deleted = T("Station Parameter removed"),
             msg_list_empty = T("No Station Parameters"))
-
-        table.virtualfields.append(station_parameters_virtualfields())
 
         configure(tablename,
                   insertable = False,
@@ -277,7 +275,7 @@ class S3ClimateModel(S3Model):
                             "climate_sample_table_spec.id",
                             sample_table_spec_represent,
                             filterby = "sample_type_code",
-                            filter_opts = ["O"],
+                            filter_opts = ("O",),
                             sort=True
                         ),
                         notnull = True,
@@ -302,14 +300,11 @@ class S3ClimateModel(S3Model):
 
         ADD = T("Add new Dataset Price")
         crud_strings[tablename] = Storage(
-            title_create = ADD,
+            label_create = ADD,
             title_display = T("Dataset Price Details"),
             title_list = T("Dataset Prices"),
             title_update = T("Edit Dataset Price"),
-            title_search = T("Search Dataset Prices"),
-            subtitle_create = ADD,
             label_list_button = T("List Dataset Prices"),
-            label_create_button = ADD,
             label_delete_button = T("Remove Dataset Price"),
             msg_record_created = T("Dataset Price added"),
             msg_record_modified = T("Dataset Price updated"),
@@ -317,62 +312,65 @@ class S3ClimateModel(S3Model):
             msg_list_empty = T("No Dataset Prices"))
 
         tablename = "climate_purchase"
-        table = define_table(tablename,
-                             #user_id(),
-                             #Field("sample_type_code",
-                             #      "string",
-                             #      requires = IS_IN_SET(sample_type_code_opts),
-                             #      represent = lambda code: ClimateDataPortal.sample_table_types_by_code[code]
-                             #),
-                             Field("parameter_id", "integer",
-                                   requires = IS_ONE_OF(db,
-                                            "climate_prices.parameter_id",
-                                            sample_table_spec_represent,
-                                            ),
-                                   represent = sample_table_spec_represent,
-                                   label = "Parameter",
-                                   ondelete = "RESTRICT"
-                                ),
-                             station_id(),
-                             s3_date("date_from",
-                                     default = "now",
-                                     empty=False
-                                    ),
-                             s3_date("date_to",
-                                     default = "now",
-                                     empty=False
-                                    ),
-                             Field("nationality", "integer",
-                                   label = T("Category"),
-                                   requires = IS_IN_SET(nationality_opts),
-                                   represent = lambda id: nationality_opts.get(id, NONE),
-                                   required = True
-                                   ),
-                             Field("notes", "text",
-                                   label = T("Receipt number / Student ID / other notes")
-                                   ),
-                             Field("price"),
-                             Field("paid", "boolean",
-                                   represent = lambda opt: \
-                                        opt and "Yes" or "No",
-                                  ),
-                             Field("i_agree_to_the_terms_and_conditions", "boolean",
-                                   required = True,
-                                   represent = lambda agrees: agrees and "Yes" or "No",
-                                   comment = DIV(_class="stickytip",
-                                                 _title="%s|%s" % (
-                                        T("Important"),
-                                        T("Check this box when you have read, "
-                                          "understand and agree to the "
-                                          "<a href='terms' target='_blank'>"
-                                          "terms and conditions"
-                                          "</a>."
+        define_table(tablename,
+                     #user_id(),
+                     #Field("sample_type_code",
+                     #      "string",
+                     #      requires = IS_IN_SET(sample_type_code_opts),
+                     #      represent = lambda code: ClimateDataPortal.sample_table_types_by_code[code]
+                     #),
+                     Field("parameter_id", "integer",
+                           requires = IS_ONE_OF(db,
+                                        "climate_prices.parameter_id",
+                                        sample_table_spec_represent,
+                                      ),
+                           represent = sample_table_spec_represent,
+                           label = "Parameter",
+                           ondelete = "RESTRICT"
+                     ),
+                     station_id(),
+                     s3_date("date_from",
+                             default = "now",
+                             empty=False
+                             ),
+                     s3_date("date_to",
+                             default = "now",
+                             empty=False
+                             ),
+                     Field("nationality", "integer",
+                           label = T("Category"),
+                           requires = IS_IN_SET(nationality_opts),
+                           represent = lambda id: nationality_opts.get(id, NONE),
+                           required = True
+                           ),
+                     Field("notes", "text",
+                           label = T("Receipt number / Student ID / other notes")
+                           ),
+                     Field("price"),
+                     Field("paid", "boolean",
+                           represent = lambda opt: \
+                                       opt and "Yes" or "No",
+                           ),
+                     Field("i_agree_to_the_terms_and_conditions", "boolean",
+                           required = True,
+                           represent = lambda agrees: agrees and "Yes" or "No",
+                           comment = DIV(_class="stickytip",
+                                         _title="%s|%s" % (
+                                           T("Important"),
+                                           T("Check this box when you have read, "
+                                             "understand and agree to the "
+                                             "<a href='terms' target='_blank'>"
+                                             "terms and conditions"
+                                             "</a>."
+                                           )
+                                          )
                                          )
-                                        )
-                                       )
-                                   ),
-                             *s3_meta_fields()
-                            )
+                           ),
+                     *s3_meta_fields()
+                     )
+
+        # @todo: make lazy_table
+        table = db[tablename]
         table.owned_by_user.label = T("User")
 
         system_roles = auth.get_system_roles()
@@ -382,14 +380,11 @@ class S3ClimateModel(S3Model):
 
         ADD = T("Purchase New Data")
         crud_strings[tablename] = Storage(
-            title_create = ADD,
+            label_create = ADD,
             title_display = T("Purchased Data Details"),
             title_list = T("All Purchased Data"),
             title_update = T("Edit Purchased Data"),
-            title_search = T("Search Purchased Data"),
-            subtitle_create = ADD,
             label_list_button = T("List Dataset Prices"),
-            label_create_button = ADD,
             label_delete_button = T("Remove Purchased Data"),
             msg_record_created = T("Data Purchase In Process"),
             msg_record_modified = T("Purchased Data updated"),
@@ -425,14 +420,11 @@ class S3ClimateModel(S3Model):
 
         ADD = T("Save Query")
         crud_strings[tablename] = Storage(
-            title_create = ADD,
+            label_create = ADD,
             title_display = T("Saved Query Details"),
             title_list = T("Saved Queries"),
             title_update = T("Edit Saved Query"),
-            title_search = T("Search Saved Queries"),
-            subtitle_create = ADD,
             label_list_button = T("List Saved Queries"),
-            label_create_button = ADD,
             label_delete_button = T("Remove Saved Query"),
             msg_record_created = T("Query Saved"),
             msg_record_modified = T("Saved Query updated"),
@@ -581,49 +573,58 @@ def sample_table_spec_represent(id, row=None):
         return current.messages["NONE"]
 
 # =============================================================================
-class station_parameters_virtualfields(dict, object):
+def climate_station_parameter_range_from(row):
 
-    # -------------------------------------------------------------------------
-    def range_from(self):
-        try:
-            query = (
-                "SELECT MIN(time_period) "
-                "from climate_sample_table_%(parameter_id)i "
-                "WHERE place_id = %(station_id)i;"
-            ) % dict(
-                parameter_id = self.climate_station_parameter.parameter_id,
-                station_id = self.climate_station_parameter.station_id,
-            )
-        except AttributeError:
-            return current.messages["NONE"]
-        date  = current.db.executesql(query)[0][0]
-        if date is not None:
-            import ClimateDataPortal
-            year, month = ClimateDataPortal.month_number_to_year_month(date)
-            return "%s-%s" % (month, year)
-        else:
-            return current.messages["NONE"]
+    default = current.messages["NONE"]
 
-    # -------------------------------------------------------------------------
-    def range_to(self):
-        try:
-            query = (
-                "SELECT MAX(time_period) "
-                "from climate_sample_table_%(parameter_id)i "
-                "WHERE place_id = %(station_id)i;"
-            ) % dict(
-                parameter_id = self.climate_station_parameter.parameter_id,
-                station_id = self.climate_station_parameter.station_id,
-            )
-        except AttributeError:
-            return current.messages["NONE"]
-        date  = current.db.executesql(query)[0][0]
-        if date is not None:
-            import ClimateDataPortal
-            year, month = ClimateDataPortal.month_number_to_year_month(date)
-            return "%s-%s" % (month, year)
-        else:
-            return current.messages["NONE"]
+    if hasattr(row, "climate_station_parameter"):
+        row = row.climate_station_parameter
+    try:
+        parameter_id = row.parameter_id
+        station_id = row.station_id
+    except AttributeError:
+        return default
+
+    table = current.s3db.table("climate_sample_table_%s" % parameter_id)
+    if not table:
+        return default
+
+    date = table.time_period.min()
+    row = db(table.place_id == station_id).select(date).first()
+    if row:
+        date = row[date]
+        import ClimateDataPortal
+        year, month = ClimateDataPortal.month_number_to_year_month(date)
+        return "%s-%s" % (month, year)
+    else:
+        return default
+
+# -------------------------------------------------------------------------
+def climate_station_parameter_range_to(self):
+
+    default = current.messages["NONE"]
+
+    if hasattr(row, "climate_station_parameter"):
+        row = row.climate_station_parameter
+    try:
+        parameter_id = row.parameter_id
+        station_id = row.station_id
+    except AttributeError:
+        return default
+
+    table = current.s3db.table("climate_sample_table_%s" % parameter_id)
+    if not table:
+        return default
+
+    date = table.time_period.max()
+    row = db(table.place_id == station_id).select(date).first()
+    if row:
+        date = row[date]
+        import ClimateDataPortal
+        year, month = ClimateDataPortal.month_number_to_year_month(date)
+        return "%s-%s" % (month, year)
+    else:
+        return default
 
 # =============================================================================
 def climate_first_run():
@@ -663,7 +664,7 @@ http://rpy.sourceforge.net/rpy2/doc-dev/html/overview.html
         # Report errors and stop.
         prefix = "\n%s: " % current.T("ACTION REQUIRED")
         msg = prefix + prefix.join(errors)
-        s3_debug(msg)
+        current.log.critical(msg)
         raise HTTP(500, body=msg)
 
     db = current.db

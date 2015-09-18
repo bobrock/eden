@@ -46,7 +46,6 @@
 
 /* Full page settings */
 .fullpage {
-    background: #fff;    /* page background colour */
     padding-top: 1px;
     overflow: visible;
 }
@@ -57,10 +56,10 @@
 }
 
 .aside {
-    float:left;
-    width:200px;
+    float: left;
+    width: 200px;
     /*margin-left: 100%;*/
 }
 .rightside {
-    margin-left:200px;
+    margin-left: 200px;
 }

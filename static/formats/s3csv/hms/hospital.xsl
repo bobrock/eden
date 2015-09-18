@@ -35,13 +35,14 @@
          Website.................hms_hospital
          Fax.....................hms_hospital
          Comments................hms_hospital
+         KV:XXX..................hms_hospital_tag Key/Value (Key = XX in column name, value = cell in row. Multiple allowed)
 
     *********************************************************************** -->
     <xsl:output method="xml"/>
-
     <xsl:include href="../../xml/commons.xsl"/>
     <xsl:include href="../../xml/countries.xsl"/>
 
+    <!-- ****************************************************************** -->
     <!-- Indexes for faster processing -->
     <!--<xsl:key name="hospital_type" match="row" use="col[@field='Type']"/>-->
     <xsl:key name="organisation" match="row" use="col[@field='Organisation']"/>
@@ -50,6 +51,18 @@
 
     <!-- ****************************************************************** -->
     <!-- Lookup column names -->
+
+    <xsl:variable name="Lat">
+        <xsl:call-template name="ResolveColumnHeader">
+            <xsl:with-param name="colname">Lat</xsl:with-param>
+        </xsl:call-template>
+    </xsl:variable>
+
+    <xsl:variable name="Lon">
+        <xsl:call-template name="ResolveColumnHeader">
+            <xsl:with-param name="colname">Lon</xsl:with-param>
+        </xsl:call-template>
+    </xsl:variable>
 
     <xsl:variable name="Postcode">
         <xsl:call-template name="ResolveColumnHeader">
@@ -110,39 +123,80 @@
             <xsl:attribute name="tuid">
                 <xsl:value-of select="$HospitalName"/>
             </xsl:attribute>
+
             <!-- Link to Location -->
             <reference field="location_id" resource="gis_location">
                 <xsl:attribute name="tuid">
                     <xsl:value-of select="$HospitalName"/>
                 </xsl:attribute>
             </reference>
+
             <!-- Link to Organisation -->
-            <reference field="organisation_id" resource="org_organisation">
-                <xsl:attribute name="tuid">
-                    <xsl:choose>
-                        <xsl:when test="$BranchName!=''">
-                            <xsl:value-of select="concat($OrgName,$BranchName)"/>
-                        </xsl:when>
-                        <xsl:otherwise>
-                            <xsl:value-of select="$OrgName"/>
-                        </xsl:otherwise>
-                    </xsl:choose>
-                </xsl:attribute>
-            </reference>
+            <xsl:if test="$OrgName!=''">
+                <reference field="organisation_id" resource="org_organisation">
+                    <xsl:attribute name="tuid">
+                        <xsl:choose>
+                            <xsl:when test="$BranchName!=''">
+                                <xsl:value-of select="concat($OrgName,$BranchName)"/>
+                            </xsl:when>
+                            <xsl:otherwise>
+                                <xsl:value-of select="$OrgName"/>
+                            </xsl:otherwise>
+                        </xsl:choose>
+                    </xsl:attribute>
+                </reference>
+            </xsl:if>
+
+            <!-- Arbitrary Tags -->
+            <xsl:for-each select="col[starts-with(@field, 'KV')]">
+                <xsl:call-template name="KeyValue"/>
+            </xsl:for-each>
 
             <!-- Facility data -->
             <data field="name"><xsl:value-of select="$HospitalName"/></data>
             <data field="code"><xsl:value-of select="col[@field='Code']"/></data>
-            <data field="address"><xsl:value-of select="col[@field='Address']"/></data>
-            <data field="postcode"><xsl:value-of select="$postcode"/></data>
-            <data field="city"><xsl:value-of select="col[@field='L3']"/></data>
-            <data field="phone_exchange"><xsl:value-of select="col[@field='Phone Switchboard']"/></data>
-            <data field="phone_business"><xsl:value-of select="col[@field='Phone Business']"/></data>
-            <data field="phone_emergency"><xsl:value-of select="col[@field='Phone Emergency']"/></data>
-            <data field="email"><xsl:value-of select="col[@field='Email']"/></data>
-            <data field="website"><xsl:value-of select="col[@field='Website']"/></data>
-            <data field="fax"><xsl:value-of select="col[@field='Fax']"/></data>
-            <data field="comments"><xsl:value-of select="col[@field='Comments']"/></data>
+
+            <xsl:variable name="Address" select="col[@field='Address']/text()"/>
+            <xsl:variable name="City" select="col[@field='L3']/text()"/>
+            <xsl:if test="$Address!=''">
+                <data field="address"><xsl:value-of select="$Address"/></data>
+            </xsl:if>
+            <xsl:if test="$postcode!=''">
+                <data field="postcode"><xsl:value-of select="$postcode"/></data>
+            </xsl:if>
+            <xsl:if test="$City!=''">
+                <data field="city"><xsl:value-of select="col[@field='L3']"/></data>
+            </xsl:if>
+
+            <xsl:variable name="PhoneSwitchboard" select="col[@field='Phone Switchboard']/text()"/>
+            <xsl:variable name="PhoneBusiness" select="col[@field='Phone Business']/text()"/>
+            <xsl:variable name="PhoneEmergency" select="col[@field='Phone Emergency']/text()"/>
+            <xsl:if test="$PhoneSwitchboard!=''">
+                <data field="phone_exchange"><xsl:value-of select="$PhoneSwitchboard"/></data>
+            </xsl:if>
+            <xsl:if test="$PhoneBusiness!=''">
+                <data field="phone_business"><xsl:value-of select="$PhoneBusiness"/></data>
+            </xsl:if>
+            <xsl:if test="$PhoneEmergency!=''">
+                <data field="phone_emergency"><xsl:value-of select="$PhoneEmergency"/></data>
+            </xsl:if>
+
+            <xsl:variable name="Email" select="col[@field='Email']/text()"/>
+            <xsl:variable name="Website" select="col[@field='Website']/text()"/>
+            <xsl:variable name="Fax" select="col[@field='Fax']/text()"/>
+            <xsl:variable name="Comments" select="col[@field='Comments']/text()"/>
+            <xsl:if test="$Email!=''">
+                <data field="email"><xsl:value-of select="$Email"/></data>
+            </xsl:if>
+            <xsl:if test="$Website!=''">
+                <data field="website"><xsl:value-of select="$Website"/></data>
+            </xsl:if>
+            <xsl:if test="$Fax!=''">
+                <data field="fax"><xsl:value-of select="$Fax"/></data>
+            </xsl:if>
+            <xsl:if test="$Comments!=''">
+                <data field="comments"><xsl:value-of select="$Comments"/></data>
+            </xsl:if>
 
             <!-- Hospital data -->
             <data field="total_beds"><xsl:value-of select="col[@field='Beds Total']"/></data>
@@ -155,42 +209,56 @@
                     <xsl:when test="$Type='Field Hospital'">2</xsl:when>
                     <xsl:when test="$Type='Specialized Hospital'">3</xsl:when>
                     <xsl:when test="$Type='Health center'">11</xsl:when>
+                    <xsl:when test="$Type='Health centre'">11</xsl:when>
                     <xsl:when test="$Type='Health center with beds'">12</xsl:when>
+                    <xsl:when test="$Type='Health centre with beds'">12</xsl:when>
                     <xsl:when test="$Type='Health center without beds'">13</xsl:when>
+                    <xsl:when test="$Type='Health centre without beds'">13</xsl:when>
                     <xsl:when test="$Type='Dispensary'">21</xsl:when>
                     <xsl:when test="$Type='Long-term care'">31</xsl:when>
+                    <xsl:when test="$Type='ETC'">41</xsl:when>
+                    <xsl:when test="$Type='Triage'">42</xsl:when>
+                    <xsl:when test="$Type='Holding Center'">43</xsl:when>
+                    <xsl:when test="$Type='Holding Centre'">43</xsl:when>
+                    <xsl:when test="$Type='Transit Center'">44</xsl:when>
+                    <xsl:when test="$Type='Transit Centre'">44</xsl:when>
                     <xsl:when test="$Type='Other'">98</xsl:when>
                     <xsl:otherwise>99</xsl:otherwise>
                 </xsl:choose>
             </data>
 
-            <xsl:variable name="Status" select="col[@field='Status']/text()"/>
             <xsl:variable name="Power" select="col[@field='Power']/text()"/>
-            <resource name="hms_status">
-                <xsl:if test="$Status!=''">
-                    <data field="facility_status">
-                        <xsl:choose>
-                            <xsl:when test="$Status='Normal'">1</xsl:when>
-                            <xsl:when test="$Status='Compromised'">2</xsl:when>
-                            <xsl:when test="$Status='Evacuating'">3</xsl:when>
-                            <xsl:when test="$Status='Closed'">4</xsl:when>
-                        </xsl:choose>
-                    </data>
-                </xsl:if>
-                <xsl:if test="col[@field='Reopening Date']!=''">
-                    <data field="date_reopening"><xsl:value-of select="col[@field='Reopening Date']"/></data>
-                </xsl:if>
-                <xsl:if test="$Power!=''">
-                    <data field="power_supply_type">
-                        <xsl:choose>
-                            <xsl:when test="$Power='Grid'">1</xsl:when>
-                            <xsl:when test="$Power='Generator'">2</xsl:when>
-                            <xsl:when test="$Power='Other'">98</xsl:when>
-                            <xsl:when test="$Power='None'">99</xsl:when>
-                        </xsl:choose>
-                    </data>
-                </xsl:if>
-            </resource>
+            <xsl:variable name="Status" select="col[@field='Status']/text()"/>
+            <xsl:variable name="ReopeningDate" select="col[@field='Reopening Date']/text()"/>
+            <xsl:if test="$Status!='' or $ReopeningDate!='' or $Power!=''">
+                <resource name="hms_status">
+                    <xsl:if test="$Status!=''">
+                        <data field="facility_status">
+                            <xsl:choose>
+                                <xsl:when test="$Status='Normal'">1</xsl:when>
+                                <xsl:when test="$Status='Functional'">1</xsl:when>
+                                <xsl:when test="$Status='Compromised'">2</xsl:when>
+                                <xsl:when test="$Status='Evacuating'">3</xsl:when>
+                                <xsl:when test="$Status='Closed'">4</xsl:when>
+                                <xsl:when test="$Status='Pending'">5</xsl:when>
+                            </xsl:choose>
+                        </data>
+                    </xsl:if>
+                    <xsl:if test="$ReopeningDate!=''">
+                        <data field="date_reopening"><xsl:value-of select="col[@field='Reopening Date']"/></data>
+                    </xsl:if>
+                    <xsl:if test="$Power!=''">
+                        <data field="power_supply_type">
+                            <xsl:choose>
+                                <xsl:when test="$Power='Grid'">1</xsl:when>
+                                <xsl:when test="$Power='Generator'">2</xsl:when>
+                                <xsl:when test="$Power='Other'">98</xsl:when>
+                                <xsl:when test="$Power='None'">99</xsl:when>
+                            </xsl:choose>
+                        </data>
+                    </xsl:if>
+                </resource>
+            </xsl:if>
 
             <xsl:variable name="Services" select="col[@field='Services']/text()"/>
             <xsl:if test="$Services!=''">
@@ -207,6 +275,19 @@
 
         <xsl:call-template name="Locations"/>
 
+    </xsl:template>
+
+    <!-- ****************************************************************** -->
+    <xsl:template name="KeyValue">
+        <xsl:variable name="Key" select="normalize-space(substring-after(@field, ':'))"/>
+        <xsl:variable name="Value" select="text()"/>
+
+        <xsl:if test="$Value!=''">
+            <resource name="hms_hospital_tag">
+                <data field="tag"><xsl:value-of select="$Key"/></data>
+                <data field="value"><xsl:value-of select="$Value"/></data>
+            </resource>
+        </xsl:if>
     </xsl:template>
 
     <!-- ****************************************************************** -->
@@ -301,12 +382,22 @@
         <xsl:variable name="l2" select="col[@field='L2']/text()"/>
         <xsl:variable name="l3" select="col[@field='L3']/text()"/>
         <xsl:variable name="l4" select="col[@field='L4']/text()"/>
-
+        <xsl:variable name="lat">
+            <xsl:call-template name="GetColumnValue">
+                <xsl:with-param name="colhdrs" select="$Lat"/>
+            </xsl:call-template>
+        </xsl:variable>
+        <xsl:variable name="lon">
+            <xsl:call-template name="GetColumnValue">
+                <xsl:with-param name="colhdrs" select="$Lon"/>
+            </xsl:call-template>
+        </xsl:variable>
         <xsl:variable name="postcode">
             <xsl:call-template name="GetColumnValue">
                 <xsl:with-param name="colhdrs" select="$Postcode"/>
             </xsl:call-template>
         </xsl:variable>
+        <xsl:variable name="AddressStreet" select="col[@field='Address']/text()"/>
 
         <!-- Country Code = UUID of the L0 Location -->
         <xsl:variable name="countrycode">
@@ -334,7 +425,7 @@
         <xsl:if test="$l1!=''">
             <resource name="gis_location">
                 <xsl:attribute name="tuid">
-                    <xsl:value-of select="concat('L1',$l1)"/>
+                    <xsl:value-of select="concat('L1/', $countrycode, '/', $l1)"/>
                 </xsl:attribute>
                 <reference field="parent" resource="gis_location">
                     <xsl:attribute name="uuid">
@@ -350,13 +441,13 @@
         <xsl:if test="$l2!=''">
             <resource name="gis_location">
                 <xsl:attribute name="tuid">
-                    <xsl:value-of select="concat('L2',$l2)"/>
+                    <xsl:value-of select="concat('L2/', $countrycode, '/', $l1, '/', $l2)"/>
                 </xsl:attribute>
                 <xsl:choose>
                     <xsl:when test="$l1!=''">
                         <reference field="parent" resource="gis_location">
                             <xsl:attribute name="tuid">
-                                <xsl:value-of select="concat('L1',$l1)"/>
+                                <xsl:value-of select="concat('L1/', $countrycode, '/', $l1)"/>
                             </xsl:attribute>
                         </reference>
                     </xsl:when>
@@ -377,20 +468,20 @@
         <xsl:if test="$l3!=''">
             <resource name="gis_location">
                 <xsl:attribute name="tuid">
-                    <xsl:value-of select="concat('L3',$l3)"/>
+                    <xsl:value-of select="concat('L3/', $countrycode, '/', $l1, '/', $l2, '/', $l3)"/>
                 </xsl:attribute>
                 <xsl:choose>
                     <xsl:when test="$l2!=''">
                         <reference field="parent" resource="gis_location">
                             <xsl:attribute name="tuid">
-                                <xsl:value-of select="concat('L2',$l2)"/>
+                                <xsl:value-of select="concat('L2/', $countrycode, '/', $l1, '/', $l2)"/>
                             </xsl:attribute>
                         </reference>
                     </xsl:when>
                     <xsl:when test="$l1!=''">
                         <reference field="parent" resource="gis_location">
                             <xsl:attribute name="tuid">
-                                <xsl:value-of select="concat('L1',$l1)"/>
+                                <xsl:value-of select="concat('L1/', $countrycode, '/', $l1)"/>
                             </xsl:attribute>
                         </reference>
                     </xsl:when>
@@ -411,27 +502,27 @@
         <xsl:if test="$l4!=''">
             <resource name="gis_location">
                 <xsl:attribute name="tuid">
-                    <xsl:value-of select="concat('L4',$l4)"/>
+                    <xsl:value-of select="concat('L4/', $countrycode, '/', $l1, '/', $l2, '/', $l3, '/', $l4)"/>
                 </xsl:attribute>
                 <xsl:choose>
                     <xsl:when test="$l3!=''">
                         <reference field="parent" resource="gis_location">
                             <xsl:attribute name="tuid">
-                                <xsl:value-of select="concat('L3',$l3)"/>
+                                <xsl:value-of select="concat('L3/', $countrycode, '/', $l1, '/', $l2, '/', $l3)"/>
                             </xsl:attribute>
                         </reference>
                     </xsl:when>
                     <xsl:when test="$l2!=''">
                         <reference field="parent" resource="gis_location">
                             <xsl:attribute name="tuid">
-                                <xsl:value-of select="concat('L2',$l2)"/>
+                                <xsl:value-of select="concat('L2/', $countrycode, '/', $l1, '/', $l2)"/>
                             </xsl:attribute>
                         </reference>
                     </xsl:when>
                     <xsl:when test="$l1!=''">
                         <reference field="parent" resource="gis_location">
                             <xsl:attribute name="tuid">
-                                <xsl:value-of select="concat('L1',$l1)"/>
+                                <xsl:value-of select="concat('L1/', $countrycode, '/', $l1)"/>
                             </xsl:attribute>
                         </reference>
                     </xsl:when>
@@ -448,7 +539,7 @@
             </resource>
         </xsl:if>
 
-        <!-- Warehouse Location -->
+        <!-- Hospital Location -->
         <resource name="gis_location">
             <xsl:attribute name="tuid">
                 <xsl:value-of select="$HospitalName"/>
@@ -457,28 +548,28 @@
                 <xsl:when test="$l4!=''">
                     <reference field="parent" resource="gis_location">
                         <xsl:attribute name="tuid">
-                            <xsl:value-of select="concat('L4',$l4)"/>
+                            <xsl:value-of select="concat('L4/', $countrycode, '/', $l1, '/', $l2, '/', $l3, '/', $l4)"/>
                         </xsl:attribute>
                     </reference>
                 </xsl:when>
                 <xsl:when test="$l3!=''">
                     <reference field="parent" resource="gis_location">
                         <xsl:attribute name="tuid">
-                            <xsl:value-of select="concat('L3',$l3)"/>
+                            <xsl:value-of select="concat('L3/', $countrycode, '/', $l1, '/', $l2, '/', $l3)"/>
                         </xsl:attribute>
                     </reference>
                 </xsl:when>
                 <xsl:when test="$l2!=''">
                     <reference field="parent" resource="gis_location">
                         <xsl:attribute name="tuid">
-                            <xsl:value-of select="concat('L2',$l2)"/>
+                            <xsl:value-of select="concat('L2/', $countrycode, '/', $l1, '/', $l2)"/>
                         </xsl:attribute>
                     </reference>
                 </xsl:when>
                 <xsl:when test="$l1!=''">
                     <reference field="parent" resource="gis_location">
                         <xsl:attribute name="tuid">
-                            <xsl:value-of select="concat('L1',$l1)"/>
+                            <xsl:value-of select="concat('L1/', $countrycode, '/', $l1)"/>
                         </xsl:attribute>
                     </reference>
                 </xsl:when>
@@ -498,10 +589,24 @@
                     <data field="name"><xsl:value-of select="$HospitalName"/></data>
                 </xsl:otherwise>
             </xsl:choose>
-            <data field="addr_street"><xsl:value-of select="col[@field='Address']"/></data>
-            <data field="addr_postcode"><xsl:value-of select="$postcode"/></data>
-            <data field="lat"><xsl:value-of select="col[@field='Lat']"/></data>
-            <data field="lon"><xsl:value-of select="col[@field='Lon']"/></data>
+
+            <!-- Address -->
+            <xsl:if test="$AddressStreet!=''">
+                <data field="addr_street">
+                    <xsl:value-of select="$AddressStreet"/>
+                </data>
+            </xsl:if>
+            <xsl:if test="$postcode!=''">
+                <data field="addr_postcode">
+                    <xsl:value-of select="$postcode"/>
+                </data>
+            </xsl:if>
+
+            <!-- Lat/Lon -->
+            <xsl:if test="$lat!='' and $lon!=''">
+                <data field="lat"><xsl:value-of select="$lat"/></data>
+                <data field="lon"><xsl:value-of select="$lon"/></data>
+            </xsl:if>
         </resource>
 
     </xsl:template>

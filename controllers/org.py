@@ -22,14 +22,67 @@ def index_alt():
         Module homepage for non-Admin users when no CMS content found
     """
 
-    # @ToDo: Move this to the Template (separate deployment_setting or else a customize for non-REST controllers)
+    # @ToDo: Move this to the Template (separate deployment_setting or else a customise for non-REST controllers)
     template = settings.get_template()
     if template == "SandyRelief":
         # Just redirect to the Facilities
-        redirect(URL(f="facility", args=["search"]))
+        s3_redirect_default(URL(f="facility"))
     else:
         # Just redirect to the list of Organisations
-        redirect(URL(f="organisation"))
+        s3_redirect_default(URL(f="organisation"))
+
+# -----------------------------------------------------------------------------
+def group():
+    """ RESTful CRUD controller """
+
+    # Use hrm/group controller for teams rather than pr/group
+    s3db.configure("pr_group",
+                   linkto = lambda record_id: \
+                            URL(c="hrm", f="group", args=[record_id]),
+                   )
+
+    return s3_rest_controller(rheader = s3db.org_rheader)
+
+# -----------------------------------------------------------------------------
+def group_membership():
+    """ RESTful CRUD controller for options.s3json lookups """
+
+    if auth.permission.format != "s3json":
+        return ""
+
+    # Pre-process
+    def prep(r):
+        if r.method != "options":
+            return False
+        return True
+    s3.prep = prep
+
+    return s3_rest_controller()
+
+# -----------------------------------------------------------------------------
+def group_membership_status():
+    """ RESTful CRUD controller """
+
+    return s3_rest_controller()
+
+# -----------------------------------------------------------------------------
+def group_person():
+    """ REST controller for options.s3json lookups """
+
+    s3.prep = lambda r: r.representation == "s3json" and r.method == "options"
+    return s3_rest_controller()
+
+# -----------------------------------------------------------------------------
+def group_person_status():
+    """ RESTful CRUD controller """
+
+    return s3_rest_controller()
+
+# -----------------------------------------------------------------------------
+def region():
+    """ RESTful CRUD controller """
+
+    return s3_rest_controller()
 
 # -----------------------------------------------------------------------------
 def sector():
@@ -54,18 +107,17 @@ def subsector():
 def site():
     """
         RESTful CRUD controller
-        - used by S3SiteAutocompleteWidget(), which doesn't yet support filtering
-                                              to just updateable sites
+        - used by S3SiteAutocompleteWidget
+          which doesn't yet support filtering to just updateable sites
+        - used by site_contact_person()
+        - used by S3OptionsFilter (e.g. Asset Log)
     """
 
     # Pre-processor
     def prep(r):
-        if r.representation != "json":
+        if r.representation != "json" and \
+           r.method not in ("search_ac", "search_address_ac", "site_contact_person"):
             return False
-        if "address" in request.args:
-            s3db.configure("org_site",
-                           search_method=s3base.S3SiteAddressSearch()
-                           )
 
         # Location Filter
         s3db.gis_location_filter(r)
@@ -78,7 +130,7 @@ def site():
 def sites_for_org():
     """
         Used to provide the list of Sites for an Organisation
-        - used in User Registration
+        - used in User Registration & Assets
     """
 
     try:
@@ -86,278 +138,37 @@ def sites_for_org():
     except:
         result = current.xml.json_message(False, 400, "No Org provided!")
     else:
-        # Find all branches for this Organisation
-        btable = s3db.org_organisation_branch
-        query = (btable.organisation_id == org) & \
-                (btable.deleted != True)
-        rows = db(query).select(btable.branch_id)
-        org_ids = [row.branch_id for row in rows] + [org]
-        stable = s3db.org_site
-        query = (stable.organisation_id.belongs(org_ids)) & \
-                (stable.deleted != True)
-        rows = db(query).select(stable.site_id,
-                                stable.name,
-                                orderby=stable.name)
-        result = rows.json()
+        try:
+            org = int(org)
+        except:
+            result = current.xml.json_message(False, 400, "Invalid Org provided!")
+        else:
+            stable = s3db.org_site
+            if settings.get_org_branches():
+                # Find all branches for this Organisation
+                btable = s3db.org_organisation_branch
+                query = (btable.organisation_id == org) & \
+                        (btable.deleted != True)
+                rows = db(query).select(btable.branch_id)
+                org_ids = [row.branch_id for row in rows] + [org]
+                query = (stable.organisation_id.belongs(org_ids)) & \
+                        (stable.deleted != True)
+            else:
+                query = (stable.organisation_id == org) & \
+                        (stable.deleted != True)
+            rows = db(query).select(stable.site_id,
+                                    stable.name,
+                                    orderby=stable.name)
+            result = rows.json()
     finally:
         response.headers["Content-Type"] = "application/json"
         return result
 
 # -----------------------------------------------------------------------------
-def facility_marker_fn(record):
-    """
-        Function to decide which Marker to use for Facilities Map
-        @ToDo: Legend
-        @ToDo: Move to Templates
-        @ToDo: Use Symbology
-    """
-
-    table = db.org_facility_type
-    types = record.facility_type_id
-    if isinstance(types, list):
-        rows = db(table.id.belongs(types)).select(table.name)
-    else:
-        rows = db(table.id == types).select(table.name)
-    types = [row.name for row in rows]
-
-    # Use Marker in preferential order
-    if "Hub" in types:
-        marker = "warehouse"
-    elif "Medical Clinic" in types:
-        marker = "hospital"
-    elif "Food" in types:
-        marker = "food"
-    elif "Relief Site" in types:
-        marker = "asset"
-    elif "Residential Building" in types:
-        marker = "residence"
-    #elif "Shelter" in types:
-    #    marker = "shelter"
-    else:
-        # Unknown
-        marker = "office"
-    if settings.has_module("req"):
-        # Colour code by open/priority requests
-        reqs = record.reqs
-        if reqs == 3:
-            # High
-            marker = "%s_red" % marker
-        elif reqs == 2:
-            # Medium
-            marker = "%s_yellow" % marker
-        elif reqs == 1:
-            # Low
-            marker = "%s_green" % marker
-
-    mtable = db.gis_marker
-    try:
-        marker = db(mtable.name == marker).select(mtable.image,
-                                                  mtable.height,
-                                                  mtable.width,
-                                                  cache=s3db.cache,
-                                                  limitby=(0, 1)
-                                                  ).first()
-    except:
-        marker = db(mtable.name == "office").select(mtable.image,
-                                                    mtable.height,
-                                                    mtable.width,
-                                                    cache=s3db.cache,
-                                                    limitby=(0, 1)
-                                                    ).first()
-    return marker
-
-# -----------------------------------------------------------------------------
 def facility():
     """ RESTful CRUD controller """
 
-    # Tell the client to request per-feature markers
-    s3db.configure("org_facility", marker_fn=facility_marker_fn)
-
-    # Pre-processor
-    def prep(r):
-        # Location Filter
-        s3db.gis_location_filter(r)
-
-        if r.interactive:
-            if r.component:
-                cname = r.component_name
-                if cname in ("inv_item", "recv", "send"):
-                    # Filter out items which are already in this inventory
-                    s3db.inv_prep(r)
-
-                    # remove CRUD generated buttons in the tabs
-                    s3db.configure("inv_inv_item",
-                                   create=False,
-                                   listadd=False,
-                                   editable=False,
-                                   deletable=False,
-                                   )
-
-                elif cname == "human_resource":
-                    # Filter to just Staff
-                    s3.filter = (s3db.hrm_human_resource.type == 1)
-                    # Make it clear that this is for adding new staff, not assigning existing
-                    s3.crud_strings.hrm_human_resource.label_create_button = T("Add New Staff Member")
-                    # Cascade the organisation_id from the office to the staff
-                    htable = s3db.hrm_human_resource
-                    field = htable.organisation_id
-                    field.default = r.record.organisation_id
-                    field.writable = False
-                    field.comment = None
-                    # Filter out people which are already staff for this office
-                    s3base.s3_filter_staff(r)
-                    # Modify list_fields
-                    s3db.configure("hrm_human_resource",
-                                   list_fields=["person_id",
-                                                "phone",
-                                                "email",
-                                                "organisation_id",
-                                                "job_title_id",
-                                                "department_id",
-                                                "site_contact",
-                                                "status",
-                                                "comments",
-                                                ]
-                                   )
-
-                elif cname == "req" and r.method not in ("update", "read"):
-                    # Hide fields which don't make sense in a Create form
-                    # inc list_create (list_fields over-rides)
-                    s3db.req_create_form_mods()
-
-                elif cname == "asset":
-                    # Default/Hide the Organisation & Site fields
-                    record = r.record
-                    atable = s3db.asset_asset
-                    field = atable.organisation_id
-                    field.default = record.organisation_id
-                    field.readable = field.writable = False
-                    field = atable.site_id
-                    field.default = record.site_id
-                    field.readable = field.writable = False
-                    # Stay within Facility tab
-                    s3db.configure("asset_asset",
-                                   create_next = None)
-
-            elif r.id:
-                field = r.table.obsolete
-                field.readable = field.writable = True
-
-        elif r.representation == "geojson":
-            # Load these models now as they'll be needed when we encode
-            mtable = s3db.gis_marker
-        
-        return True
-    s3.prep = prep
-
-    def postp(r, output):
-        if r.representation == "plain" and \
-             r.method !="search":
-            # Custom Map Popup
-            output = TABLE()
-            append = output.append
-            # Edit button
-            append(TR(TD(A(T("Edit"),
-                           _target="_blank",
-                           _id="edit-btn",
-                           _href=URL(args=[r.id, "update"])))))
-
-            # Name
-            append(TR(TD(B("%s:" % T("Name"))),
-                      TD(r.record.name)))
-
-            # Type
-            if r.record.facility_type_id:
-                append(TR(TD(B("%s:" % r.table.facility_type_id.label)),
-                          TD(r.table.facility_type_id.represent(r.record.facility_type_id))))
-
-            # Comments
-            if r.record.comments:
-                append(TR(TD(B("%s:" % r.table.comments.label)),
-                          TD(r.record.comments)))
-
-            # Organization (better with just name rather than Represent)
-            # @ToDo: Make this configurable - some deployments will only see
-            #        their staff so this is a meaningless field
-            table = s3db.org_organisation
-            query = (table.id == r.record.organisation_id)
-            org = db(query).select(table.name,
-                                    limitby=(0, 1)).first()
-            if org:
-                append(TR(TD(B("%s:" % r.table.organisation_id.label)),
-                          TD(org.name)))
-
-            # Requests link to the Site_ID
-            site_id = r.record.site_id
-
-            # Open/High/Medium priority Requests
-            rtable = s3db.req_req
-            query = (rtable.site_id == site_id) & \
-                    (rtable.fulfil_status != 2) & \
-                    (rtable.priority.belongs((2, 3)))
-            reqs = db(query).select(rtable.id,
-                                    rtable.req_ref,
-                                    rtable.type,
-                                    )
-            if reqs:
-                append(TR(TD(B("%s:" % T("Requests")))))
-                req_types = {1:"req_item",
-                             3:"req_skill",
-                             8:"",
-                             9:"",
-                             }
-                vals = [A(req.req_ref,
-                          _href=URL(c="req", f="req",
-                                    args=[req.id, req_types[req.type]])) for req in reqs]
-                for val in vals:
-                    append(TR(TD(val, _colspan=2)))
-
-            gtable = s3db.gis_location
-            stable = s3db.org_site
-            query = (gtable.id == stable.location_id) & \
-                    (stable.id == site_id)
-            location = db(query).select(gtable.addr_street,
-                                        limitby=(0, 1)).first()
-            # Street address
-            if location.addr_street:
-                append(TR(TD(B("%s:" % gtable.addr_street.label)),
-                          TD(location.addr_street)))
-
-            # Opening Times
-            opens = r.record.opening_times
-            if opens:
-                append(TR(TD(B("%s:" % r.table.opening_times.label)),
-                          TD(opens)))
-
-            # Phone number
-            contact = r.record.contact
-            if contact:
-                append(TR(TD(B("%s:" % r.table.contact.label)),
-                          TD(contact)))
-
-            # Phone number
-            phone1 = r.record.phone1
-            if phone1:
-                append(TR(TD(B("%s:" % r.table.phone1.label)),
-                          TD(phone1)))
-
-            # Email address (as hyperlink)
-            email = r.record.email
-            if email:
-                append(TR(TD(B("%s:" % r.table.email.label)),
-                          TD(A(email, _href="mailto:%s" % email))))
-
-            # Website (as hyperlink)
-            website = r.record.website
-            if website:
-                append(TR(TD(B("%s:" % r.table.website.label)),
-                          TD(A(website, _href=website))))
-
-        return output
-    s3.postp = postp
-
-    output = s3_rest_controller(rheader=s3db.org_rheader)
-    return output
+    return s3db.org_facility_controller()
 
 # -----------------------------------------------------------------------------
 def facility_type():
@@ -388,12 +199,11 @@ def organisation():
 def org_search():
     """
         Organisation REST controller
-        - limited to just search.json for use in Autocompletes
+        - limited to just search_ac for use in Autocompletes
         - allows differential access permissions
     """
 
-    s3.prep = lambda r: r.representation == "json" and \
-                        r.method == "search"
+    s3.prep = lambda r: r.method == "search_ac"
     return s3_rest_controller(module, "organisation")
 
 # -----------------------------------------------------------------------------
@@ -411,6 +221,75 @@ def organisation_list_represent(l):
         return NONE
 
 # -----------------------------------------------------------------------------
+def capacity_indicator():
+    """ RESTful CRUD controller """
+
+    return s3_rest_controller()
+
+# -----------------------------------------------------------------------------
+def capacity_assessment():
+    """ RESTful CRUD controller """
+
+    S3SQLInlineComponent = s3base.S3SQLInlineComponent
+
+    crud_fields = ["organisation_id",
+                   "date",
+                   "person_id",
+                   ]
+    cappend = crud_fields.append
+
+    table = s3db.org_capacity_indicator
+    rows = db(table.deleted != True).select(table.id,
+                                            table.section,
+                                            table.header,
+                                            table.number,
+                                            table.name,
+                                            orderby = table.number,
+                                            )
+
+    subheadings = {}
+
+    section = None
+    for row in rows:
+        name = "number%s" % row.number
+        if row.section != section:
+            label = section = row.section
+            #subheadings[T(section)] = "sub_%sdata" % name
+        else:
+            label = ""
+        cappend(S3SQLInlineComponent("data",
+                                     name = name,
+                                     label = label,
+                                     fields = ((row.header, "indicator_id"),
+                                               "rating",
+                                               "ranking",
+                                               ),
+                                     filterby = dict(field = "indicator_id",
+                                                     options = row.id
+                                                     ),
+                                     multiple = False,
+                                     ),
+                )
+
+    crud_form = s3base.S3SQLCustomForm(*crud_fields)
+
+    s3db.configure("org_capacity_assessment",
+                   crud_form = crud_form,
+                   subheadings = subheadings,
+                   )
+
+    return s3_rest_controller()
+
+# -----------------------------------------------------------------------------
+def capacity_assessment_data():
+    """
+        RESTful CRUD controller
+        - just used for the custom_report method
+    """
+
+    return s3_rest_controller()
+
+# -----------------------------------------------------------------------------
 def office():
     """ RESTful CRUD controller """
 
@@ -426,7 +305,7 @@ def person():
             # Do not serve other representations here
             return False
         else:
-            s3mgr.show_ids = True
+            current.xml.show_ids = True
         return True
     s3.prep = prep
 
@@ -435,6 +314,12 @@ def person():
 # -----------------------------------------------------------------------------
 def room():
     """ RESTful CRUD controller """
+
+    def prep(r):
+        field = r.table.site_id
+        field.readable = field.writable = True
+        return True
+    s3.prep = prep
 
     return s3_rest_controller()
 
@@ -446,7 +331,7 @@ def mailing_list():
     table = s3db[tablename]
 
     # Only groups with a group_type of 5
-    response.s3.filter = (table.group_type == 5)
+    s3.filter = (table.group_type == 5)
     table.group_type.writable = False
     table.group_type.readable = False
     table.name.label = T("Mailing List Name")
@@ -454,15 +339,15 @@ def mailing_list():
 
     # define the list_fields
     list_fields = s3db.configure(tablename,
-                                        list_fields = ["id",
-                                                       "name",
-                                                       "description",
-                                                      ])
+                                 list_fields = ["id",
+                                                "name",
+                                                "description",
+                                                ])
     # Components
     _rheader = s3db.pr_rheader
     _tabs = [(T("Organization"), "organisation/"),
-            (T("Mailing List Details"), None),
-           ]
+             (T("Mailing List Details"), None),
+             ]
     if len(request.args) > 0:
         _tabs.append((T("Members"), "group_membership"))
     if "viewing" in request.vars:
@@ -471,7 +356,7 @@ def mailing_list():
             table = s3db[tablename]
             _rheader = s3db.org_rheader
             _tabs = []
-    s3db.add_component("pr_group_membership", pr_group="group_id")
+    s3db.add_components("pr_group", pr_group_membership="group_id")
 
     rheader = lambda r: _rheader(r, tabs = _tabs)
     return s3_rest_controller("pr",
@@ -487,14 +372,11 @@ def donor():
 
     tablename = "org_donor"
     s3.crud_strings[tablename] = Storage(
-        title_create = ADD_DONOR,
+        label_create = ADD_DONOR,
         title_display = T("Donor Details"),
         title_list = T("Donors Report"),
         title_update = T("Edit Donor"),
-        title_search = T("Search Donors"),
-        subtitle_create = T("Add New Donor"),
         label_list_button = T("List Donors"),
-        label_create_button = ADD_DONOR,
         label_delete_button = T("Delete Donor"),
         msg_record_created = T("Donor added"),
         msg_record_modified = T("Donor updated"),
@@ -515,12 +397,12 @@ def resource():
             if r.method in ("create", "update"):
                 # Context from a Profile page?"
                 table = r.table
-                location_id = request.get_vars.get("(location)", None)
+                location_id = get_vars.get("(location)", None)
                 if location_id:
                     field = table.location_id
                     field.default = location_id
                     field.readable = field.writable = False
-                organisation_id = request.get_vars.get("(organisation)", None)
+                organisation_id = get_vars.get("(organisation)", None)
                 if organisation_id:
                     field = table.organisation_id
                     field.default = organisation_id
@@ -528,11 +410,17 @@ def resource():
 
         return True
     s3.prep = prep
-    
+
     return s3_rest_controller()
 
 # -----------------------------------------------------------------------------
 def resource_type():
+    """ RESTful CRUD controller """
+
+    return s3_rest_controller()
+
+# -----------------------------------------------------------------------------
+def service():
     """ RESTful CRUD controller """
 
     return s3_rest_controller()
@@ -548,10 +436,11 @@ def incoming():
     """
         Incoming Shipments for Sites
 
-        @unused
+        Used from Requests rheader when looking at Transport Status
     """
 
-    return inv_incoming()
+    # @ToDo: Create this function!
+    return s3db.inv_incoming()
 
 # -----------------------------------------------------------------------------
 def facility_geojson():
