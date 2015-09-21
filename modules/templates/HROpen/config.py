@@ -17,7 +17,7 @@ def config(settings):
 
     T = current.T
 
-    settings.base.system_name = T("HROpen Sahana Disaster Management Platform")
+    settings.base.system_name = T("Sahana Disaster Management Platform")
     #settings.base.system_name_short = T("Sahana")
 
     # PrePopulate data
